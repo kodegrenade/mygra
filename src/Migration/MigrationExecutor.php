@@ -10,6 +10,7 @@ use Mygra\Transform\TransformPipeline;
 use Mygra\Logger\LoggerInterface;
 use Mygra\Logger\NullLogger;
 use Mygra\Schema\SchemaConverter;
+use Mygra\Validation\ValidationRunner;
 
 /**
  * Migration Executor
@@ -23,6 +24,7 @@ class MigrationExecutor
   private AdapterInterface $source;
   private AdapterInterface $target;
   private TransformPipeline $pipeline;
+  private ValidationRunner $validator;
   private LoggerInterface $logger;
 
   private int $batchSize = 1000;
@@ -38,11 +40,13 @@ class MigrationExecutor
     AdapterInterface $source,
     AdapterInterface $target,
     ?TransformPipeline $pipeline = null,
+    ?ValidationRunner $validator = null,
     ?LoggerInterface $logger = null
   ) {
     $this->source = $source;
     $this->target = $target;
     $this->pipeline = $pipeline ?? TransformPipeline::withDefaults();
+    $this->validator = $validator ?? ValidationRunner::withDefaults();
     $this->logger = $logger ?? new NullLogger();
   }
 
@@ -147,6 +151,27 @@ class MigrationExecutor
         try {
           // Transform the row
           $transformed = $this->pipeline->process($row, $schema->fields);
+
+          // Validate the transformed row
+          if (!empty($schema->validations)) {
+            $validation = $this->validator->validateRow($transformed, $schema->validations);
+            if (!$validation->isValid()) {
+              $errorCount++;
+              $errorMsg = "Validation failed: " . $validation->getFormattedErrors();
+              $result->addError([
+                'row' => $row,
+                'error' => $errorMsg,
+              ]);
+              $this->logger->warning("Row validation error: {$errorMsg}");
+
+              $onError = $schema->getOption('on_error', $this->options['on_error'] ?? 'skip');
+              if ($onError === 'abort') {
+                throw new \Exception("Migration aborted due to validation error: {$errorMsg}");
+              }
+
+              continue; // Skip this row
+            }
+          }
 
           $batch[] = $transformed;
 
