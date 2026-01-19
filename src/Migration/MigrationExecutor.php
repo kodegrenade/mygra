@@ -9,6 +9,7 @@ use Mygra\Config\SchemaConfig;
 use Mygra\Transform\TransformPipeline;
 use Mygra\Logger\LoggerInterface;
 use Mygra\Logger\NullLogger;
+use Mygra\Schema\SchemaConverter;
 
 /**
  * Migration Executor
@@ -28,6 +29,7 @@ class MigrationExecutor
   private bool $dryRun = false;
   private bool $useTransactions = true;
   private int $savepointInterval = 10000;
+  private array $options = [];
 
   /** @var callable|null */
   private $progressCallback = null;
@@ -111,6 +113,11 @@ class MigrationExecutor
     $this->logger->info("Source: {$schema->sourceTable} -> Target: {$schema->targetTable}");
 
     try {
+      // Ensure target table exists
+      if ($this->shouldCreateTarget($schema)) {
+        $this->ensureTargetTableExists($schema);
+      }
+
       // Build the SELECT query
       $query = $this->buildSelectQuery($schema);
       $this->logger->debug("Query: {$query}");
@@ -324,5 +331,57 @@ class MigrationExecutor
     if ($this->progressCallback !== null) {
       ($this->progressCallback)($processed, $total, $status);
     }
+  }
+
+  /**
+   * Should the target table be created if missing?
+   */
+  private function shouldCreateTarget(SchemaConfig $schema): bool
+  {
+    return $schema->getOption('create_target', false) || ($this->options['auto_create'] ?? false);
+  }
+
+  /**
+   * Ensure the target table exists, creating it if necessary.
+   */
+  private function ensureTargetTableExists(SchemaConfig $schema): void
+  {
+    $targetTables = $this->target->getTables();
+    if (in_array($schema->targetTable, $targetTables)) {
+      return;
+    }
+
+    $this->logger->info("Target table '{$schema->targetTable}' missing. Attempting to create...");
+
+    if ($this->dryRun) {
+      $this->logger->info("Dry run: Would create table '{$schema->targetTable}'");
+      return;
+    }
+
+    // Get source schema
+    $sourceTableSchema = $this->source->getTableSchema($schema->sourceTable);
+
+    // Convert to target schema
+    $converter = new SchemaConverter();
+    $targetTableSchema = $converter->convert($sourceTableSchema, $schema);
+
+    // Generate SQL
+    $driver = $this->target->getPdo()->getAttribute(\PDO::ATTR_DRIVER_NAME);
+    $sql = $targetTableSchema->toCreateTableSQL($driver);
+
+    $this->logger->debug("Create SQL: {$sql}");
+
+    // Execute
+    $this->target->execute($sql);
+    $this->logger->info("Target table '{$schema->targetTable}' created successfully.");
+  }
+
+  /**
+   * Set global options for the executor.
+   */
+  public function setOptions(array $options): self
+  {
+    $this->options = array_merge($this->options ?? [], $options);
+    return $this;
   }
 }

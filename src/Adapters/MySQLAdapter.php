@@ -51,8 +51,8 @@ class MySQLAdapter extends AbstractAdapter
       $options
     );
 
-    // Set SQL mode for stricter handling
-    $this->pdo->exec("SET sql_mode='STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO'");
+    // Set SQL mode (relaxed to support legacy zero dates)
+    $this->pdo->exec("SET sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'");
   }
 
   /**

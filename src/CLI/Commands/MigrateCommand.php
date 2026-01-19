@@ -60,6 +60,12 @@ class MigrateCommand extends Command
         'Preview actions without executing'
       )
       ->addOption(
+        'create',
+        null,
+        InputOption::VALUE_NONE,
+        'Automatically create target table if missing'
+      )
+      ->addOption(
         'no-progress',
         null,
         InputOption::VALUE_NONE,
@@ -143,6 +149,9 @@ HELP
 
     $executor->setBatchSize((int) $input->getOption('batch-size'));
     $executor->setDryRun((bool) $input->getOption('dry-run'));
+    $executor->setOptions([
+      'auto_create' => $input->getOption('create')
+    ]);
 
     if ($input->getOption('dry-run')) {
       $io->warning('DRY RUN MODE - No changes will be made');

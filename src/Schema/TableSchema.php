@@ -138,28 +138,50 @@ class TableSchema
 
   /**
    * Generate a CREATE TABLE statement for this schema.
-   * Note: This is a simplified version; actual implementation would need
-   * to be driver-specific.
    */
   public function toCreateTableSQL(string $driver = 'mysql'): string
   {
+    $driver = strtolower($driver);
     $lines = [];
 
     foreach ($this->columns as $col) {
-      $colType = $col->nativeType ?? $col->type;
-      $line = "  `{$col->name}` {$colType}";
+      $nativeType = TypeMapper::toNative($col->type, $driver);
+
+      // Handle length
+      $length = $col->length;
+      if ($length === null && $col->type === 'string') {
+        $length = TypeMapper::defaultLength($col->type, $driver);
+      }
+
+      $typeStr = $nativeType;
+      if ($length !== null && in_array($driver, ['mysql', 'sqlsrv'])) {
+        $typeStr .= "({$length})";
+      }
+
+      $line = "  " . $this->quoteIdentifier($col->name, $driver) . " {$typeStr}";
 
       if (!$col->nullable) {
         $line .= ' NOT NULL';
       }
 
       if ($col->default !== null) {
-        $default = is_string($col->default) ? "'{$col->default}'" : $col->default;
+        $default = $col->default;
+        if (is_string($default) && !is_numeric($default)) {
+          // Avoid double quoting if already quoted
+          if (!(str_starts_with($default, "'") && str_ends_with($default, "'"))) {
+            $default = "'{$default}'";
+          }
+        }
         $line .= " DEFAULT {$default}";
       }
 
       if ($col->isAutoIncrement) {
-        $line .= ' AUTO_INCREMENT';
+        $line .= match ($driver) {
+          'mysql' => ' AUTO_INCREMENT',
+          'pgsql' => '', // PostgreSQL usually uses SERIAL or IDENTITY which is part of the type
+          'sqlsrv' => ' IDENTITY(1,1)',
+          default => '',
+        };
       }
 
       $lines[] = $line;
@@ -168,12 +190,24 @@ class TableSchema
     // Add primary key
     if ($this->primaryKey) {
       $pkCols = is_array($this->primaryKey) ? $this->primaryKey : [$this->primaryKey];
-      $pkList = implode('`, `', $pkCols);
-      $lines[] = "  PRIMARY KEY (`{$pkList}`)";
+      $quotedPkCols = array_map(fn($c) => $this->quoteIdentifier($c, $driver), $pkCols);
+      $pkList = implode(', ', $quotedPkCols);
+      $lines[] = "  PRIMARY KEY ({$pkList})";
     }
 
     $columnDefs = implode(",\n", $lines);
+    $tableName = $this->quoteIdentifier($this->name, $driver);
 
-    return "CREATE TABLE `{$this->name}` (\n{$columnDefs}\n);";
+    return "CREATE TABLE {$tableName} (\n{$columnDefs}\n);";
+  }
+
+  private function quoteIdentifier(string $identifier, string $driver): string
+  {
+    return match ($driver) {
+      'mysql' => "`{$identifier}`",
+      'pgsql', 'sqlite' => "\"{$identifier}\"",
+      'sqlsrv' => "[{$identifier}]",
+      default => "`{$identifier}`",
+    };
   }
 }
