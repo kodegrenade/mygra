@@ -165,7 +165,7 @@ class MigrationResult
         return $this->warnings;
     }
 
-    public function getMetadata(string $key = null): mixed
+    public function getMetadata(?string $key = null): mixed
     {
         if ($key === null) {
             return $this->metadata;
