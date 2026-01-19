@@ -1,0 +1,143 @@
+# Mygra Configuration File
+# Universal Database Schema Migration Tool v2.0
+
+version: "2.0"
+
+# ============================================================================
+# Database Connections
+# ============================================================================
+# Define source and target database connections.
+# Supports environment variable interpolation with ${VAR_NAME} syntax.
+# Use ${VAR_NAME:-default} for optional variables with defaults.
+
+connections:
+  source:
+    driver: mysql              # mysql, postgresql, sqlite, sqlserver
+    host: 127.0.0.1
+    port: 3306
+    database: source_db
+    user: root
+    password: ${SOURCE_DB_PASSWORD:-}
+    charset: utf8mb4
+
+  target:
+    driver: mysql
+    host: 127.0.0.1
+    port: 3306
+    database: target_db
+    user: root
+    password: ${TARGET_DB_PASSWORD:-}
+    charset: utf8mb4
+
+# ============================================================================
+# Global Settings
+# ============================================================================
+
+settings:
+  batch_size: 1000            # Rows per batch insert
+  log_level: info             # debug, info, warning, error
+  log_file: logs/migration.log
+  transaction_mode: per_batch # per_batch | per_schema | single
+  on_error: rollback          # rollback | skip | abort
+
+# ============================================================================
+# Schema Mappings
+# ============================================================================
+# Define how data migrates from source tables to target tables.
+
+schemas:
+  # Example: User migration
+  users:
+    source_table: users
+    target_table: app_users
+    
+    # Field mappings: source_column -> target_column
+    fields:
+      id: id
+      username: username
+      email: email
+      password_hash: password
+      created_at: created_at
+      updated_at: updated_at
+      status: is_active
+    
+    # Transformations applied during migration
+    transforms:
+      created_at:
+        - transformer: date
+          options:
+            input_format: "U"           # Unix timestamp
+            output_format: "Y-m-d H:i:s"
+      
+      updated_at:
+        - transformer: date
+          options:
+            input_format: "U"
+            output_format: "Y-m-d H:i:s"
+      
+      is_active:
+        - transformer: boolean
+          options:
+            true_values: [1, "1", "active"]
+            false_values: [0, "0", "inactive", "blocked"]
+            output_format: int
+      
+      username:
+        - transformer: string
+          options:
+            operations: [trim]
+            case: lower
+            max_length: 50
+    
+    # Validation rules (checked before insert)
+    validations:
+      email:
+        - validator: required
+        - validator: email
+      username:
+        - validator: required
+        - validator: length
+          options:
+            min: 3
+            max: 50
+    
+    # Optional WHERE clause to filter source data
+    # where: "status = 1 AND deleted_at IS NULL"
+    
+    # Optional JOINs for related data
+    # joins:
+    #   - table: user_profiles
+    #     type: LEFT
+    #     source_key: id
+    #     target_key: user_id
+    #     fields:
+    #       bio: biography
+    #       avatar_url: avatar
+
+  # Example: Posts migration with joins
+  # posts:
+  #   source_table: posts
+  #   target_table: articles
+  #   
+  #   fields:
+  #     id: id
+  #     title: title
+  #     body: content
+  #     author_id: user_id
+  #     created_at: published_at
+  #   
+  #   joins:
+  #     - table: categories
+  #       type: LEFT
+  #       source_key: category_id
+  #       target_key: id
+  #       fields:
+  #         name: category_name
+  #   
+  #   transforms:
+  #     content:
+  #       - transformer: string
+  #         options:
+  #           operations: [strip_tags]
+  #   
+  #   where: "status = 'published'"

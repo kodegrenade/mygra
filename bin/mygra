@@ -1,0 +1,42 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Mygra CLI - Universal Database Migration Tool
+ * 
+ * Usage:
+ *   php bin/mygra migrate --config=config/mygra.yaml --schema=users
+ *   php bin/mygra inspect --connection=source users
+ *   php bin/mygra diff --source=users --target=wp_users
+ */
+
+// Find autoloader
+$autoloaderPaths = [
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/../../../autoload.php',
+];
+
+$autoloaderFound = false;
+foreach ($autoloaderPaths as $path) {
+    if (file_exists($path)) {
+        require_once $path;
+        $autoloaderFound = true;
+        break;
+    }
+}
+
+if (!$autoloaderFound) {
+    fwrite(STDERR, "Error: Could not find Composer autoloader.\n");
+    fwrite(STDERR, "Please run 'composer install' first.\n");
+    exit(1);
+}
+
+use Mygra\CLI\Application;
+
+// Run the application
+$app = new Application();
+$exitCode = $app->run();
+
+exit($exitCode);
