@@ -12,95 +12,95 @@ namespace Mygra\Adapters;
  */
 class AdapterFactory
 {
-    private static array $driverMap = [
-        'mysql' => MySQLAdapter::class,
-        'mariadb' => MySQLAdapter::class,
-        'pgsql' => PostgreSQLAdapter::class,
-        'postgresql' => PostgreSQLAdapter::class,
-        'postgres' => PostgreSQLAdapter::class,
-        'sqlite' => SQLiteAdapter::class,
-        'sqlite3' => SQLiteAdapter::class,
-        'sqlsrv' => SQLServerAdapter::class,
-        'sqlserver' => SQLServerAdapter::class,
-        'mssql' => SQLServerAdapter::class,
-        'dblib' => SQLServerAdapter::class,
-    ];
+  private static array $driverMap = [
+    'mysql' => MySQLAdapter::class,
+    'mariadb' => MySQLAdapter::class,
+    'pgsql' => PostgreSQLAdapter::class,
+    'postgresql' => PostgreSQLAdapter::class,
+    'postgres' => PostgreSQLAdapter::class,
+    'sqlite' => SQLiteAdapter::class,
+    'sqlite3' => SQLiteAdapter::class,
+    'sqlsrv' => SQLServerAdapter::class,
+    'sqlserver' => SQLServerAdapter::class,
+    'mssql' => SQLServerAdapter::class,
+    'dblib' => SQLServerAdapter::class,
+  ];
 
-    /**
-     * Create an adapter from configuration.
-     *
-     * @param array $config Configuration array with 'driver' key
-     * @return AdapterInterface Connected adapter instance
-     * @throws \InvalidArgumentException If driver is not supported
-     */
-    public static function create(array $config): AdapterInterface
-    {
-        $driver = strtolower($config['driver'] ?? '');
+  /**
+   * Create an adapter from configuration.
+   *
+   * @param array $config Configuration array with 'driver' key
+   * @return AdapterInterface Connected adapter instance
+   * @throws \InvalidArgumentException If driver is not supported
+   */
+  public static function create(array $config): AdapterInterface
+  {
+    $driver = strtolower($config['driver'] ?? '');
 
-        if (!isset(self::$driverMap[$driver])) {
-            throw new \InvalidArgumentException(
-                "Unsupported database driver: '{$driver}'. " .
-                    "Supported drivers: " . implode(', ', array_keys(self::$driverMap))
-            );
-        }
-
-        $adapterClass = self::$driverMap[$driver];
-        $adapter = new $adapterClass();
-        $adapter->connect($config);
-
-        return $adapter;
+    if (!isset(self::$driverMap[$driver])) {
+      throw new \InvalidArgumentException(
+        "Unsupported database driver: '{$driver}'. " .
+          "Supported drivers: " . implode(', ', array_keys(self::$driverMap))
+      );
     }
 
-    /**
-     * Create an adapter without connecting.
-     *
-     * @param string $driver Driver name
-     * @return AdapterInterface Adapter instance (not connected)
-     */
-    public static function createWithoutConnect(string $driver): AdapterInterface
-    {
-        $driver = strtolower($driver);
+    $adapterClass = self::$driverMap[$driver];
+    $adapter = new $adapterClass();
+    $adapter->connect($config);
 
-        if (!isset(self::$driverMap[$driver])) {
-            throw new \InvalidArgumentException(
-                "Unsupported database driver: '{$driver}'. " .
-                    "Supported drivers: " . implode(', ', array_keys(self::$driverMap))
-            );
-        }
+    return $adapter;
+  }
 
-        return new (self::$driverMap[$driver])();
+  /**
+   * Create an adapter without connecting.
+   *
+   * @param string $driver Driver name
+   * @return AdapterInterface Adapter instance (not connected)
+   */
+  public static function createWithoutConnect(string $driver): AdapterInterface
+  {
+    $driver = strtolower($driver);
+
+    if (!isset(self::$driverMap[$driver])) {
+      throw new \InvalidArgumentException(
+        "Unsupported database driver: '{$driver}'. " .
+          "Supported drivers: " . implode(', ', array_keys(self::$driverMap))
+      );
     }
 
-    /**
-     * Register a custom adapter for a driver.
-     *
-     * @param string $driver Driver name
-     * @param string $adapterClass Fully qualified class name
-     */
-    public static function register(string $driver, string $adapterClass): void
-    {
-        if (!is_subclass_of($adapterClass, AdapterInterface::class)) {
-            throw new \InvalidArgumentException(
-                "Adapter class must implement AdapterInterface"
-            );
-        }
+    return new (self::$driverMap[$driver])();
+  }
 
-        self::$driverMap[strtolower($driver)] = $adapterClass;
+  /**
+   * Register a custom adapter for a driver.
+   *
+   * @param string $driver Driver name
+   * @param string $adapterClass Fully qualified class name
+   */
+  public static function register(string $driver, string $adapterClass): void
+  {
+    if (!is_subclass_of($adapterClass, AdapterInterface::class)) {
+      throw new \InvalidArgumentException(
+        "Adapter class must implement AdapterInterface"
+      );
     }
 
-    /**
-     * Get list of supported drivers.
-     */
-    public static function getSupportedDrivers(): array
-    {
-        return array_unique(array_keys(self::$driverMap));
-    }
+    self::$driverMap[strtolower($driver)] = $adapterClass;
+  }
 
-    /**
-     * Check if a driver is supported.
-     */
-    public static function isSupported(string $driver): bool
-    {
-        return isset(self::$driverMap[strtolower($driver)]);
-    }
+  /**
+   * Get list of supported drivers.
+   */
+  public static function getSupportedDrivers(): array
+  {
+    return array_unique(array_keys(self::$driverMap));
+  }
+
+  /**
+   * Check if a driver is supported.
+   */
+  public static function isSupported(string $driver): bool
+  {
+    return isset(self::$driverMap[strtolower($driver)]);
+  }
 }

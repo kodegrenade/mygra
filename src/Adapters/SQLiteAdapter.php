@@ -15,314 +15,314 @@ use Mygra\Schema\ColumnSchema;
  */
 class SQLiteAdapter extends AbstractAdapter
 {
-    protected string $driver = 'sqlite';
+  protected string $driver = 'sqlite';
 
-    // =========================================================================
-    // Connection Management
-    // =========================================================================
+  // =========================================================================
+  // Connection Management
+  // =========================================================================
 
-    public function connect(array $config): void
-    {
-        $this->config = $config;
+  public function connect(array $config): void
+  {
+    $this->config = $config;
 
-        $database = $config['database'] ?? ':memory:';
-        $dsn = "sqlite:{$database}";
+    $database = $config['database'] ?? ':memory:';
+    $dsn = "sqlite:{$database}";
 
-        $options = [
-            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
-        ];
+    $options = [
+      \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+      \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
+    ];
 
-        if (isset($config['options']) && is_array($config['options'])) {
-            $options = array_merge($options, $config['options']);
-        }
-
-        $this->pdo = new \PDO($dsn, null, null, $options);
-
-        // Enable foreign key constraints (disabled by default in SQLite)
-        $this->pdo->exec('PRAGMA foreign_keys = ON');
-
-        // Set journal mode for better performance and durability
-        $journalMode = $config['journal_mode'] ?? 'WAL';
-        $this->pdo->exec("PRAGMA journal_mode = {$journalMode}");
-
-        // Set synchronous mode
-        $synchronous = $config['synchronous'] ?? 'NORMAL';
-        $this->pdo->exec("PRAGMA synchronous = {$synchronous}");
+    if (isset($config['options']) && is_array($config['options'])) {
+      $options = array_merge($options, $config['options']);
     }
 
-    // =========================================================================
-    // Schema Introspection
-    // =========================================================================
+    $this->pdo = new \PDO($dsn, null, null, $options);
 
-    public function getTables(): array
-    {
-        $result = $this->query(
-            "SELECT name 
+    // Enable foreign key constraints (disabled by default in SQLite)
+    $this->pdo->exec('PRAGMA foreign_keys = ON');
+
+    // Set journal mode for better performance and durability
+    $journalMode = $config['journal_mode'] ?? 'WAL';
+    $this->pdo->exec("PRAGMA journal_mode = {$journalMode}");
+
+    // Set synchronous mode
+    $synchronous = $config['synchronous'] ?? 'NORMAL';
+    $this->pdo->exec("PRAGMA synchronous = {$synchronous}");
+  }
+
+  // =========================================================================
+  // Schema Introspection
+  // =========================================================================
+
+  public function getTables(): array
+  {
+    $result = $this->query(
+      "SELECT name 
              FROM sqlite_master 
              WHERE type = 'table' 
              AND name NOT LIKE 'sqlite_%'
              ORDER BY name"
-        );
+    );
 
-        return array_column($result, 'name');
+    return array_column($result, 'name');
+  }
+
+  public function getTableSchema(string $table): TableSchema
+  {
+    $columnsData = $this->getColumns($table);
+    return $this->buildTableSchema($table, $columnsData);
+  }
+
+  public function getColumns(string $table): array
+  {
+    return $this->query("PRAGMA table_info(" . $this->quoteIdentifier($table) . ")");
+  }
+
+  public function getPrimaryKey(string $table): string|array|null
+  {
+    $columns = $this->getColumns($table);
+
+    $pkColumns = array_filter($columns, fn($col) => $col['pk'] > 0);
+
+    if (empty($pkColumns)) {
+      return null;
     }
 
-    public function getTableSchema(string $table): TableSchema
-    {
-        $columnsData = $this->getColumns($table);
-        return $this->buildTableSchema($table, $columnsData);
+    // Sort by pk order
+    usort($pkColumns, fn($a, $b) => $a['pk'] <=> $b['pk']);
+
+    $pkNames = array_column($pkColumns, 'name');
+    return count($pkNames) === 1 ? $pkNames[0] : $pkNames;
+  }
+
+  public function getForeignKeys(string $table): array
+  {
+    $result = $this->query("PRAGMA foreign_key_list(" . $this->quoteIdentifier($table) . ")");
+
+    $foreignKeys = [];
+    foreach ($result as $row) {
+      $foreignKeys[] = [
+        'name' => "fk_{$table}_{$row['from']}",
+        'column' => $row['from'],
+        'referencedTable' => $row['table'],
+        'referencedColumn' => $row['to'],
+        'onUpdate' => $row['on_update'],
+        'onDelete' => $row['on_delete'],
+      ];
     }
 
-    public function getColumns(string $table): array
-    {
-        return $this->query("PRAGMA table_info(" . $this->quoteIdentifier($table) . ")");
+    return $foreignKeys;
+  }
+
+  public function getIndexes(string $table): array
+  {
+    $result = $this->query("PRAGMA index_list(" . $this->quoteIdentifier($table) . ")");
+
+    $indexes = [];
+    foreach ($result as $row) {
+      $indexName = $row['name'];
+
+      // Get columns for this index
+      $indexInfo = $this->query("PRAGMA index_info(" . $this->quoteIdentifier($indexName) . ")");
+
+      $indexes[] = [
+        'name' => $indexName,
+        'columns' => array_column($indexInfo, 'name'),
+        'unique' => (bool) $row['unique'],
+        'primary' => str_starts_with($indexName, 'sqlite_autoindex_'),
+      ];
     }
 
-    public function getPrimaryKey(string $table): string|array|null
-    {
-        $columns = $this->getColumns($table);
+    return $indexes;
+  }
 
-        $pkColumns = array_filter($columns, fn($col) => $col['pk'] > 0);
+  // =========================================================================
+  // Transaction Support
+  // =========================================================================
 
-        if (empty($pkColumns)) {
-            return null;
+  public function savepoint(string $name): void
+  {
+    $this->execute("SAVEPOINT {$name}");
+  }
+
+  public function rollbackToSavepoint(string $name): void
+  {
+    $this->execute("ROLLBACK TO SAVEPOINT {$name}");
+  }
+
+  public function releaseSavepoint(string $name): void
+  {
+    $this->execute("RELEASE SAVEPOINT {$name}");
+  }
+
+  // =========================================================================
+  // Batch Operations
+  // =========================================================================
+
+  public function batchInsert(string $table, array $columns, array $rows): int
+  {
+    if (empty($rows)) {
+      return 0;
+    }
+
+    // SQLite has a limit on compound INSERT, so we batch appropriately
+    $maxBatchSize = 500; // SQLite's SQLITE_MAX_COMPOUND_SELECT default is 500
+    $totalInserted = 0;
+
+    foreach (array_chunk($rows, $maxBatchSize) as $batch) {
+      $quotedTable = $this->quoteIdentifier($table);
+      $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
+      $columnList = implode(', ', $quotedColumns);
+
+      $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+      $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
+
+      $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
+
+      $values = [];
+      foreach ($batch as $row) {
+        foreach ($columns as $col) {
+          $values[] = $row[$col] ?? null;
         }
+      }
 
-        // Sort by pk order
-        usort($pkColumns, fn($a, $b) => $a['pk'] <=> $b['pk']);
-
-        $pkNames = array_column($pkColumns, 'name');
-        return count($pkNames) === 1 ? $pkNames[0] : $pkNames;
+      $totalInserted += $this->execute($sql, $values);
     }
 
-    public function getForeignKeys(string $table): array
-    {
-        $result = $this->query("PRAGMA foreign_key_list(" . $this->quoteIdentifier($table) . ")");
+    return $totalInserted;
+  }
 
-        $foreignKeys = [];
-        foreach ($result as $row) {
-            $foreignKeys[] = [
-                'name' => "fk_{$table}_{$row['from']}",
-                'column' => $row['from'],
-                'referencedTable' => $row['table'],
-                'referencedColumn' => $row['to'],
-                'onUpdate' => $row['on_update'],
-                'onDelete' => $row['on_delete'],
-            ];
+  /**
+   * Batch insert with INSERT OR REPLACE (upsert) support.
+   */
+  public function batchUpsert(string $table, array $columns, array $rows): int
+  {
+    if (empty($rows)) {
+      return 0;
+    }
+
+    $maxBatchSize = 500;
+    $totalInserted = 0;
+
+    foreach (array_chunk($rows, $maxBatchSize) as $batch) {
+      $quotedTable = $this->quoteIdentifier($table);
+      $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
+      $columnList = implode(', ', $quotedColumns);
+
+      $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+      $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
+
+      $sql = "INSERT OR REPLACE INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
+
+      $values = [];
+      foreach ($batch as $row) {
+        foreach ($columns as $col) {
+          $values[] = $row[$col] ?? null;
         }
+      }
 
-        return $foreignKeys;
+      $totalInserted += $this->execute($sql, $values);
     }
 
-    public function getIndexes(string $table): array
-    {
-        $result = $this->query("PRAGMA index_list(" . $this->quoteIdentifier($table) . ")");
+    return $totalInserted;
+  }
 
-        $indexes = [];
-        foreach ($result as $row) {
-            $indexName = $row['name'];
+  // =========================================================================
+  // Utility Methods
+  // =========================================================================
 
-            // Get columns for this index
-            $indexInfo = $this->query("PRAGMA index_info(" . $this->quoteIdentifier($indexName) . ")");
+  public function quoteIdentifier(string $identifier): string
+  {
+    // SQLite uses double quotes for identifier quoting
+    $identifier = str_replace('"', '""', $identifier);
+    return '"' . $identifier . '"';
+  }
 
-            $indexes[] = [
-                'name' => $indexName,
-                'columns' => array_column($indexInfo, 'name'),
-                'unique' => (bool) $row['unique'],
-                'primary' => str_starts_with($indexName, 'sqlite_autoindex_'),
-            ];
-        }
+  public function getPlaceholderStyle(): string
+  {
+    return 'positional'; // SQLite uses ? placeholders
+  }
 
-        return $indexes;
+  /**
+   * Get SQLite version.
+   */
+  public function getServerVersion(): string
+  {
+    $result = $this->query("SELECT sqlite_version() as version");
+    return $result[0]['version'] ?? '';
+  }
+
+  /**
+   * Vacuum the database to reclaim space.
+   */
+  public function vacuum(): void
+  {
+    $this->execute('VACUUM');
+  }
+
+  /**
+   * Analyze the database for query optimization.
+   */
+  public function analyze(): void
+  {
+    $this->execute('ANALYZE');
+  }
+
+  // =========================================================================
+  // Helper Methods
+  // =========================================================================
+
+  protected function buildColumnSchema(array $columnData): ColumnSchema
+  {
+    // Parse type for length info (e.g., VARCHAR(255))
+    $type = $columnData['type'];
+    $length = null;
+
+    if (preg_match('/(\w+)\((\d+)\)/', $type, $matches)) {
+      $type = $matches[1];
+      $length = (int) $matches[2];
     }
 
-    // =========================================================================
-    // Transaction Support
-    // =========================================================================
+    return new ColumnSchema(
+      name: $columnData['name'],
+      type: $this->normalizeType($type),
+      nativeType: $columnData['type'],
+      nullable: $columnData['notnull'] == 0,
+      default: $columnData['dflt_value'],
+      length: $length,
+      precision: null,
+      scale: null,
+      isPrimaryKey: $columnData['pk'] > 0,
+      isAutoIncrement: $columnData['pk'] > 0 && strtoupper($type) === 'INTEGER',
+      isUnique: false,
+      comment: null,
+      extra: []
+    );
+  }
 
-    public function savepoint(string $name): void
-    {
-        $this->execute("SAVEPOINT {$name}");
+  /**
+   * Normalize SQLite data type to a standard type.
+   */
+  private function normalizeType(string $sqliteType): string
+  {
+    $type = strtoupper($sqliteType);
+
+    // SQLite type affinity rules
+    if (str_contains($type, 'INT')) {
+      return 'integer';
+    }
+    if (str_contains($type, 'CHAR') || str_contains($type, 'CLOB') || str_contains($type, 'TEXT')) {
+      return 'text';
+    }
+    if (str_contains($type, 'BLOB') || $type === '') {
+      return 'blob';
+    }
+    if (str_contains($type, 'REAL') || str_contains($type, 'FLOA') || str_contains($type, 'DOUB')) {
+      return 'float';
     }
 
-    public function rollbackToSavepoint(string $name): void
-    {
-        $this->execute("ROLLBACK TO SAVEPOINT {$name}");
-    }
-
-    public function releaseSavepoint(string $name): void
-    {
-        $this->execute("RELEASE SAVEPOINT {$name}");
-    }
-
-    // =========================================================================
-    // Batch Operations
-    // =========================================================================
-
-    public function batchInsert(string $table, array $columns, array $rows): int
-    {
-        if (empty($rows)) {
-            return 0;
-        }
-
-        // SQLite has a limit on compound INSERT, so we batch appropriately
-        $maxBatchSize = 500; // SQLite's SQLITE_MAX_COMPOUND_SELECT default is 500
-        $totalInserted = 0;
-
-        foreach (array_chunk($rows, $maxBatchSize) as $batch) {
-            $quotedTable = $this->quoteIdentifier($table);
-            $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-            $columnList = implode(', ', $quotedColumns);
-
-            $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-            $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
-
-            $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-            $values = [];
-            foreach ($batch as $row) {
-                foreach ($columns as $col) {
-                    $values[] = $row[$col] ?? null;
-                }
-            }
-
-            $totalInserted += $this->execute($sql, $values);
-        }
-
-        return $totalInserted;
-    }
-
-    /**
-     * Batch insert with INSERT OR REPLACE (upsert) support.
-     */
-    public function batchUpsert(string $table, array $columns, array $rows): int
-    {
-        if (empty($rows)) {
-            return 0;
-        }
-
-        $maxBatchSize = 500;
-        $totalInserted = 0;
-
-        foreach (array_chunk($rows, $maxBatchSize) as $batch) {
-            $quotedTable = $this->quoteIdentifier($table);
-            $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-            $columnList = implode(', ', $quotedColumns);
-
-            $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-            $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
-
-            $sql = "INSERT OR REPLACE INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-            $values = [];
-            foreach ($batch as $row) {
-                foreach ($columns as $col) {
-                    $values[] = $row[$col] ?? null;
-                }
-            }
-
-            $totalInserted += $this->execute($sql, $values);
-        }
-
-        return $totalInserted;
-    }
-
-    // =========================================================================
-    // Utility Methods
-    // =========================================================================
-
-    public function quoteIdentifier(string $identifier): string
-    {
-        // SQLite uses double quotes for identifier quoting
-        $identifier = str_replace('"', '""', $identifier);
-        return '"' . $identifier . '"';
-    }
-
-    public function getPlaceholderStyle(): string
-    {
-        return 'positional'; // SQLite uses ? placeholders
-    }
-
-    /**
-     * Get SQLite version.
-     */
-    public function getServerVersion(): string
-    {
-        $result = $this->query("SELECT sqlite_version() as version");
-        return $result[0]['version'] ?? '';
-    }
-
-    /**
-     * Vacuum the database to reclaim space.
-     */
-    public function vacuum(): void
-    {
-        $this->execute('VACUUM');
-    }
-
-    /**
-     * Analyze the database for query optimization.
-     */
-    public function analyze(): void
-    {
-        $this->execute('ANALYZE');
-    }
-
-    // =========================================================================
-    // Helper Methods
-    // =========================================================================
-
-    protected function buildColumnSchema(array $columnData): ColumnSchema
-    {
-        // Parse type for length info (e.g., VARCHAR(255))
-        $type = $columnData['type'];
-        $length = null;
-
-        if (preg_match('/(\w+)\((\d+)\)/', $type, $matches)) {
-            $type = $matches[1];
-            $length = (int) $matches[2];
-        }
-
-        return new ColumnSchema(
-            name: $columnData['name'],
-            type: $this->normalizeType($type),
-            nativeType: $columnData['type'],
-            nullable: $columnData['notnull'] == 0,
-            default: $columnData['dflt_value'],
-            length: $length,
-            precision: null,
-            scale: null,
-            isPrimaryKey: $columnData['pk'] > 0,
-            isAutoIncrement: $columnData['pk'] > 0 && strtoupper($type) === 'INTEGER',
-            isUnique: false,
-            comment: null,
-            extra: []
-        );
-    }
-
-    /**
-     * Normalize SQLite data type to a standard type.
-     */
-    private function normalizeType(string $sqliteType): string
-    {
-        $type = strtoupper($sqliteType);
-
-        // SQLite type affinity rules
-        if (str_contains($type, 'INT')) {
-            return 'integer';
-        }
-        if (str_contains($type, 'CHAR') || str_contains($type, 'CLOB') || str_contains($type, 'TEXT')) {
-            return 'text';
-        }
-        if (str_contains($type, 'BLOB') || $type === '') {
-            return 'blob';
-        }
-        if (str_contains($type, 'REAL') || str_contains($type, 'FLOA') || str_contains($type, 'DOUB')) {
-            return 'float';
-        }
-
-        // NUMERIC affinity
-        return 'numeric';
-    }
+    // NUMERIC affinity
+    return 'numeric';
+  }
 }

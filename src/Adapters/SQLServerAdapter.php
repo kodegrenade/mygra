@@ -15,105 +15,105 @@ use Mygra\Schema\ColumnSchema;
  */
 class SQLServerAdapter extends AbstractAdapter
 {
-    protected string $driver = 'sqlsrv';
-    private string $schema = 'dbo';
+  protected string $driver = 'sqlsrv';
+  private string $schema = 'dbo';
 
-    // =========================================================================
-    // Connection Management
-    // =========================================================================
+  // =========================================================================
+  // Connection Management
+  // =========================================================================
 
-    public function connect(array $config): void
-    {
-        $this->config = $config;
+  public function connect(array $config): void
+  {
+    $this->config = $config;
 
-        $host = $config['host'] ?? 'localhost';
-        $port = $config['port'] ?? 1433;
-        $database = $config['database'] ?? '';
-        $this->schema = $config['schema'] ?? 'dbo';
+    $host = $config['host'] ?? 'localhost';
+    $port = $config['port'] ?? 1433;
+    $database = $config['database'] ?? '';
+    $this->schema = $config['schema'] ?? 'dbo';
 
-        // Check for PDO driver (sqlsrv or dblib)
-        $driver = $config['pdo_driver'] ?? $this->detectDriver();
+    // Check for PDO driver (sqlsrv or dblib)
+    $driver = $config['pdo_driver'] ?? $this->detectDriver();
 
-        if ($driver === 'sqlsrv') {
-            // Native Windows driver
-            $dsn = "sqlsrv:Server={$host},{$port};Database={$database}";
-        } else {
-            // FreeTDS/dblib for Linux/Mac
-            $dsn = "dblib:host={$host}:{$port};dbname={$database}";
-        }
-
-        $options = [
-            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
-        ];
-
-        if (isset($config['options']) && is_array($config['options'])) {
-            $options = array_merge($options, $config['options']);
-        }
-
-        $this->pdo = new \PDO(
-            $dsn,
-            $config['user'] ?? 'sa',
-            $config['password'] ?? '',
-            $options
-        );
+    if ($driver === 'sqlsrv') {
+      // Native Windows driver
+      $dsn = "sqlsrv:Server={$host},{$port};Database={$database}";
+    } else {
+      // FreeTDS/dblib for Linux/Mac
+      $dsn = "dblib:host={$host}:{$port};dbname={$database}";
     }
 
-    /**
-     * Detect available SQL Server PDO driver.
-     */
-    private function detectDriver(): string
-    {
-        $drivers = \PDO::getAvailableDrivers();
+    $options = [
+      \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+      \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
+    ];
 
-        if (in_array('sqlsrv', $drivers)) {
-            return 'sqlsrv';
-        }
-        if (in_array('dblib', $drivers)) {
-            return 'dblib';
-        }
-
-        throw new \RuntimeException(
-            'No SQL Server PDO driver available. Install sqlsrv (Windows) or dblib (Linux/Mac).'
-        );
+    if (isset($config['options']) && is_array($config['options'])) {
+      $options = array_merge($options, $config['options']);
     }
 
-    /**
-     * Set the active schema.
-     */
-    public function setSchema(string $schema): void
-    {
-        $this->schema = $schema;
+    $this->pdo = new \PDO(
+      $dsn,
+      $config['user'] ?? 'sa',
+      $config['password'] ?? '',
+      $options
+    );
+  }
+
+  /**
+   * Detect available SQL Server PDO driver.
+   */
+  private function detectDriver(): string
+  {
+    $drivers = \PDO::getAvailableDrivers();
+
+    if (in_array('sqlsrv', $drivers)) {
+      return 'sqlsrv';
+    }
+    if (in_array('dblib', $drivers)) {
+      return 'dblib';
     }
 
-    // =========================================================================
-    // Schema Introspection
-    // =========================================================================
+    throw new \RuntimeException(
+      'No SQL Server PDO driver available. Install sqlsrv (Windows) or dblib (Linux/Mac).'
+    );
+  }
 
-    public function getTables(): array
-    {
-        $result = $this->query(
-            "SELECT TABLE_NAME 
+  /**
+   * Set the active schema.
+   */
+  public function setSchema(string $schema): void
+  {
+    $this->schema = $schema;
+  }
+
+  // =========================================================================
+  // Schema Introspection
+  // =========================================================================
+
+  public function getTables(): array
+  {
+    $result = $this->query(
+      "SELECT TABLE_NAME 
              FROM INFORMATION_SCHEMA.TABLES 
              WHERE TABLE_SCHEMA = ? 
              AND TABLE_TYPE = 'BASE TABLE'
              ORDER BY TABLE_NAME",
-            [$this->schema]
-        );
+      [$this->schema]
+    );
 
-        return array_column($result, 'TABLE_NAME');
-    }
+    return array_column($result, 'TABLE_NAME');
+  }
 
-    public function getTableSchema(string $table): TableSchema
-    {
-        $columnsData = $this->getColumns($table);
-        return $this->buildTableSchema($table, $columnsData);
-    }
+  public function getTableSchema(string $table): TableSchema
+  {
+    $columnsData = $this->getColumns($table);
+    return $this->buildTableSchema($table, $columnsData);
+  }
 
-    public function getColumns(string $table): array
-    {
-        return $this->query(
-            "SELECT 
+  public function getColumns(string $table): array
+  {
+    return $this->query(
+      "SELECT 
                 c.COLUMN_NAME,
                 c.DATA_TYPE,
                 c.IS_NULLABLE,
@@ -136,14 +136,14 @@ class SQLServerAdapter extends AbstractAdapter
              WHERE c.TABLE_SCHEMA = ?
              AND c.TABLE_NAME = ?
              ORDER BY c.ORDINAL_POSITION",
-            [$this->schema . '.' . $table, $this->schema, $table, $this->schema, $table]
-        );
-    }
+      [$this->schema . '.' . $table, $this->schema, $table, $this->schema, $table]
+    );
+  }
 
-    public function getPrimaryKey(string $table): string|array|null
-    {
-        $result = $this->query(
-            "SELECT ku.COLUMN_NAME
+  public function getPrimaryKey(string $table): string|array|null
+  {
+    $result = $this->query(
+      "SELECT ku.COLUMN_NAME
              FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
              JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku 
                  ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME
@@ -151,21 +151,21 @@ class SQLServerAdapter extends AbstractAdapter
              AND tc.TABLE_NAME = ?
              AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
              ORDER BY ku.ORDINAL_POSITION",
-            [$this->schema, $table]
-        );
+      [$this->schema, $table]
+    );
 
-        if (empty($result)) {
-            return null;
-        }
-
-        $columns = array_column($result, 'COLUMN_NAME');
-        return count($columns) === 1 ? $columns[0] : $columns;
+    if (empty($result)) {
+      return null;
     }
 
-    public function getForeignKeys(string $table): array
-    {
-        $result = $this->query(
-            "SELECT 
+    $columns = array_column($result, 'COLUMN_NAME');
+    return count($columns) === 1 ? $columns[0] : $columns;
+  }
+
+  public function getForeignKeys(string $table): array
+  {
+    $result = $this->query(
+      "SELECT 
                 fk.name as CONSTRAINT_NAME,
                 cp.name as COLUMN_NAME,
                 OBJECT_NAME(fk.referenced_object_id) as REFERENCED_TABLE,
@@ -178,26 +178,26 @@ class SQLServerAdapter extends AbstractAdapter
                  AND fkc.referenced_column_id = cr.column_id
              WHERE OBJECT_SCHEMA_NAME(fk.parent_object_id) = ?
              AND OBJECT_NAME(fk.parent_object_id) = ?",
-            [$this->schema, $table]
-        );
+      [$this->schema, $table]
+    );
 
-        $foreignKeys = [];
-        foreach ($result as $row) {
-            $foreignKeys[] = [
-                'name' => $row['CONSTRAINT_NAME'],
-                'column' => $row['COLUMN_NAME'],
-                'referencedTable' => $row['REFERENCED_TABLE'],
-                'referencedColumn' => $row['REFERENCED_COLUMN'],
-            ];
-        }
-
-        return $foreignKeys;
+    $foreignKeys = [];
+    foreach ($result as $row) {
+      $foreignKeys[] = [
+        'name' => $row['CONSTRAINT_NAME'],
+        'column' => $row['COLUMN_NAME'],
+        'referencedTable' => $row['REFERENCED_TABLE'],
+        'referencedColumn' => $row['REFERENCED_COLUMN'],
+      ];
     }
 
-    public function getIndexes(string $table): array
-    {
-        $result = $this->query(
-            "SELECT 
+    return $foreignKeys;
+  }
+
+  public function getIndexes(string $table): array
+  {
+    $result = $this->query(
+      "SELECT 
                 i.name as INDEX_NAME,
                 c.name as COLUMN_NAME,
                 i.is_unique as IS_UNIQUE,
@@ -209,308 +209,308 @@ class SQLServerAdapter extends AbstractAdapter
              AND OBJECT_NAME(i.object_id) = ?
              AND i.name IS NOT NULL
              ORDER BY i.name, ic.key_ordinal",
-            [$this->schema, $table]
-        );
+      [$this->schema, $table]
+    );
 
-        $indexes = [];
-        foreach ($result as $row) {
-            $indexName = $row['INDEX_NAME'];
-            if (!isset($indexes[$indexName])) {
-                $indexes[$indexName] = [
-                    'name' => $indexName,
-                    'columns' => [],
-                    'unique' => (bool) $row['IS_UNIQUE'],
-                    'primary' => (bool) $row['IS_PRIMARY'],
-                ];
-            }
-            $indexes[$indexName]['columns'][] = $row['COLUMN_NAME'];
+    $indexes = [];
+    foreach ($result as $row) {
+      $indexName = $row['INDEX_NAME'];
+      if (!isset($indexes[$indexName])) {
+        $indexes[$indexName] = [
+          'name' => $indexName,
+          'columns' => [],
+          'unique' => (bool) $row['IS_UNIQUE'],
+          'primary' => (bool) $row['IS_PRIMARY'],
+        ];
+      }
+      $indexes[$indexName]['columns'][] = $row['COLUMN_NAME'];
+    }
+
+    return array_values($indexes);
+  }
+
+  // =========================================================================
+  // Transaction Support
+  // =========================================================================
+
+  public function savepoint(string $name): void
+  {
+    $this->execute("SAVE TRANSACTION {$name}");
+  }
+
+  public function rollbackToSavepoint(string $name): void
+  {
+    $this->execute("ROLLBACK TRANSACTION {$name}");
+  }
+
+  public function releaseSavepoint(string $name): void
+  {
+    // SQL Server doesn't have RELEASE SAVEPOINT - savepoints are released on commit
+  }
+
+  // =========================================================================
+  // Batch Operations
+  // =========================================================================
+
+  public function batchInsert(string $table, array $columns, array $rows): int
+  {
+    if (empty($rows)) {
+      return 0;
+    }
+
+    // SQL Server has a limit of 1000 rows per INSERT
+    $maxBatchSize = 1000;
+    $totalInserted = 0;
+
+    foreach (array_chunk($rows, $maxBatchSize) as $batch) {
+      $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+      $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
+      $columnList = implode(', ', $quotedColumns);
+
+      $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+      $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
+
+      $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
+
+      $values = [];
+      foreach ($batch as $row) {
+        foreach ($columns as $col) {
+          $values[] = $row[$col] ?? null;
         }
+      }
 
-        return array_values($indexes);
+      $totalInserted += $this->execute($sql, $values);
     }
 
-    // =========================================================================
-    // Transaction Support
-    // =========================================================================
+    return $totalInserted;
+  }
 
-    public function savepoint(string $name): void
-    {
-        $this->execute("SAVE TRANSACTION {$name}");
+  /**
+   * Batch insert with MERGE (upsert) support.
+   */
+  public function batchUpsert(
+    string $table,
+    array $columns,
+    array $rows,
+    array $keyColumns,
+    array $updateColumns = []
+  ): int {
+    if (empty($rows)) {
+      return 0;
     }
 
-    public function rollbackToSavepoint(string $name): void
-    {
-        $this->execute("ROLLBACK TRANSACTION {$name}");
-    }
+    $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
 
-    public function releaseSavepoint(string $name): void
-    {
-        // SQL Server doesn't have RELEASE SAVEPOINT - savepoints are released on commit
-    }
+    $totalAffected = 0;
 
-    // =========================================================================
-    // Batch Operations
-    // =========================================================================
+    foreach ($rows as $row) {
+      // Build MERGE statement for each row
+      $matchConditions = [];
+      foreach ($keyColumns as $col) {
+        $matchConditions[] = "target." . $this->quoteIdentifier($col) . " = source." . $this->quoteIdentifier($col);
+      }
 
-    public function batchInsert(string $table, array $columns, array $rows): int
-    {
-        if (empty($rows)) {
-            return 0;
-        }
+      $sourceValues = [];
+      $sourceColumns = [];
+      $paramIndex = 0;
+      foreach ($columns as $col) {
+        $sourceColumns[] = "? as " . $this->quoteIdentifier($col);
+        $sourceValues[] = $row[$col] ?? null;
+      }
 
-        // SQL Server has a limit of 1000 rows per INSERT
-        $maxBatchSize = 1000;
-        $totalInserted = 0;
+      $insertColumns = implode(', ', $quotedColumns);
+      $insertValues = 'source.' . implode(', source.', $quotedColumns);
 
-        foreach (array_chunk($rows, $maxBatchSize) as $batch) {
-            $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-            $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-            $columnList = implode(', ', $quotedColumns);
-
-            $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-            $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
-
-            $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-            $values = [];
-            foreach ($batch as $row) {
-                foreach ($columns as $col) {
-                    $values[] = $row[$col] ?? null;
-                }
-            }
-
-            $totalInserted += $this->execute($sql, $values);
-        }
-
-        return $totalInserted;
-    }
-
-    /**
-     * Batch insert with MERGE (upsert) support.
-     */
-    public function batchUpsert(
-        string $table,
-        array $columns,
-        array $rows,
-        array $keyColumns,
-        array $updateColumns = []
-    ): int {
-        if (empty($rows)) {
-            return 0;
-        }
-
-        $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-        $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-
-        $totalAffected = 0;
-
-        foreach ($rows as $row) {
-            // Build MERGE statement for each row
-            $matchConditions = [];
-            foreach ($keyColumns as $col) {
-                $matchConditions[] = "target." . $this->quoteIdentifier($col) . " = source." . $this->quoteIdentifier($col);
-            }
-
-            $sourceValues = [];
-            $sourceColumns = [];
-            $paramIndex = 0;
-            foreach ($columns as $col) {
-                $sourceColumns[] = "? as " . $this->quoteIdentifier($col);
-                $sourceValues[] = $row[$col] ?? null;
-            }
-
-            $insertColumns = implode(', ', $quotedColumns);
-            $insertValues = 'source.' . implode(', source.', $quotedColumns);
-
-            $sql = "MERGE {$quotedTable} AS target
+      $sql = "MERGE {$quotedTable} AS target
                     USING (SELECT " . implode(', ', $sourceColumns) . ") AS source
                     ON " . implode(' AND ', $matchConditions) . "
                     WHEN MATCHED THEN UPDATE SET ";
 
-            $updates = [];
-            $updateCols = empty($updateColumns) ? array_diff($columns, $keyColumns) : $updateColumns;
-            foreach ($updateCols as $col) {
-                $quoted = $this->quoteIdentifier($col);
-                $updates[] = "target.{$quoted} = source.{$quoted}";
-            }
-            $sql .= implode(', ', $updates);
+      $updates = [];
+      $updateCols = empty($updateColumns) ? array_diff($columns, $keyColumns) : $updateColumns;
+      foreach ($updateCols as $col) {
+        $quoted = $this->quoteIdentifier($col);
+        $updates[] = "target.{$quoted} = source.{$quoted}";
+      }
+      $sql .= implode(', ', $updates);
 
-            $sql .= " WHEN NOT MATCHED THEN INSERT ({$insertColumns}) VALUES ({$insertValues});";
+      $sql .= " WHEN NOT MATCHED THEN INSERT ({$insertColumns}) VALUES ({$insertValues});";
 
-            $totalAffected += $this->execute($sql, $sourceValues);
-        }
-
-        return $totalAffected;
+      $totalAffected += $this->execute($sql, $sourceValues);
     }
 
-    // =========================================================================
-    // Streaming (SQL Server specific)
-    // =========================================================================
+    return $totalAffected;
+  }
 
-    public function streamQuery(string $sql, array $params = []): \Generator
-    {
-        // SQL Server doesn't support cursor-based streaming via PDO like PostgreSQL
-        // We'll use OFFSET/FETCH paging for memory efficiency
-        $pageSize = 1000;
-        $offset = 0;
+  // =========================================================================
+  // Streaming (SQL Server specific)
+  // =========================================================================
 
-        // Ensure the query has an ORDER BY for consistent paging
-        if (stripos($sql, 'ORDER BY') === false) {
-            throw new \RuntimeException(
-                'Streaming queries in SQL Server require an ORDER BY clause for consistent results.'
-            );
-        }
+  public function streamQuery(string $sql, array $params = []): \Generator
+  {
+    // SQL Server doesn't support cursor-based streaming via PDO like PostgreSQL
+    // We'll use OFFSET/FETCH paging for memory efficiency
+    $pageSize = 1000;
+    $offset = 0;
 
-        while (true) {
-            $pagedSql = $sql . " OFFSET {$offset} ROWS FETCH NEXT {$pageSize} ROWS ONLY";
-            $rows = $this->query($pagedSql, $params);
-
-            if (empty($rows)) {
-                break;
-            }
-
-            foreach ($rows as $row) {
-                yield $row;
-            }
-
-            if (count($rows) < $pageSize) {
-                break;
-            }
-
-            $offset += $pageSize;
-        }
+    // Ensure the query has an ORDER BY for consistent paging
+    if (stripos($sql, 'ORDER BY') === false) {
+      throw new \RuntimeException(
+        'Streaming queries in SQL Server require an ORDER BY clause for consistent results.'
+      );
     }
 
-    // =========================================================================
-    // Utility Methods
-    // =========================================================================
+    while (true) {
+      $pagedSql = $sql . " OFFSET {$offset} ROWS FETCH NEXT {$pageSize} ROWS ONLY";
+      $rows = $this->query($pagedSql, $params);
 
-    public function quoteIdentifier(string $identifier): string
-    {
-        // SQL Server uses square brackets for identifier quoting
-        $identifier = str_replace(']', ']]', $identifier);
-        return '[' . $identifier . ']';
+      if (empty($rows)) {
+        break;
+      }
+
+      foreach ($rows as $row) {
+        yield $row;
+      }
+
+      if (count($rows) < $pageSize) {
+        break;
+      }
+
+      $offset += $pageSize;
     }
+  }
 
-    public function getPlaceholderStyle(): string
-    {
-        return 'positional'; // SQL Server uses ? placeholders with PDO
-    }
+  // =========================================================================
+  // Utility Methods
+  // =========================================================================
 
-    /**
-     * Get the current schema.
-     */
-    public function getCurrentSchema(): string
-    {
-        return $this->schema;
-    }
+  public function quoteIdentifier(string $identifier): string
+  {
+    // SQL Server uses square brackets for identifier quoting
+    $identifier = str_replace(']', ']]', $identifier);
+    return '[' . $identifier . ']';
+  }
 
-    /**
-     * Get SQL Server version.
-     */
-    public function getServerVersion(): string
-    {
-        $result = $this->query("SELECT @@VERSION as version");
-        return $result[0]['version'] ?? '';
-    }
+  public function getPlaceholderStyle(): string
+  {
+    return 'positional'; // SQL Server uses ? placeholders with PDO
+  }
 
-    /**
-     * Get all available schemas.
-     */
-    public function getSchemas(): array
-    {
-        $result = $this->query(
-            "SELECT SCHEMA_NAME 
+  /**
+   * Get the current schema.
+   */
+  public function getCurrentSchema(): string
+  {
+    return $this->schema;
+  }
+
+  /**
+   * Get SQL Server version.
+   */
+  public function getServerVersion(): string
+  {
+    $result = $this->query("SELECT @@VERSION as version");
+    return $result[0]['version'] ?? '';
+  }
+
+  /**
+   * Get all available schemas.
+   */
+  public function getSchemas(): array
+  {
+    $result = $this->query(
+      "SELECT SCHEMA_NAME 
              FROM INFORMATION_SCHEMA.SCHEMATA 
              WHERE SCHEMA_NAME NOT IN ('guest', 'INFORMATION_SCHEMA', 'sys')
              ORDER BY SCHEMA_NAME"
-        );
-        return array_column($result, 'SCHEMA_NAME');
-    }
+    );
+    return array_column($result, 'SCHEMA_NAME');
+  }
 
-    /**
-     * Enable IDENTITY_INSERT for a table.
-     */
-    public function enableIdentityInsert(string $table): void
-    {
-        $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-        $this->execute("SET IDENTITY_INSERT {$quotedTable} ON");
-    }
+  /**
+   * Enable IDENTITY_INSERT for a table.
+   */
+  public function enableIdentityInsert(string $table): void
+  {
+    $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $this->execute("SET IDENTITY_INSERT {$quotedTable} ON");
+  }
 
-    /**
-     * Disable IDENTITY_INSERT for a table.
-     */
-    public function disableIdentityInsert(string $table): void
-    {
-        $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-        $this->execute("SET IDENTITY_INSERT {$quotedTable} OFF");
-    }
+  /**
+   * Disable IDENTITY_INSERT for a table.
+   */
+  public function disableIdentityInsert(string $table): void
+  {
+    $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $this->execute("SET IDENTITY_INSERT {$quotedTable} OFF");
+  }
 
-    // =========================================================================
-    // Helper Methods
-    // =========================================================================
+  // =========================================================================
+  // Helper Methods
+  // =========================================================================
 
-    protected function buildColumnSchema(array $columnData): ColumnSchema
-    {
-        return new ColumnSchema(
-            name: $columnData['COLUMN_NAME'],
-            type: $this->normalizeType($columnData['DATA_TYPE']),
-            nativeType: $columnData['DATA_TYPE'],
-            nullable: ($columnData['IS_NULLABLE'] ?? 'YES') === 'YES',
-            default: $columnData['COLUMN_DEFAULT'],
-            length: isset($columnData['CHARACTER_MAXIMUM_LENGTH'])
-                ? (int) $columnData['CHARACTER_MAXIMUM_LENGTH']
-                : null,
-            precision: isset($columnData['NUMERIC_PRECISION'])
-                ? (int) $columnData['NUMERIC_PRECISION']
-                : null,
-            scale: isset($columnData['NUMERIC_SCALE'])
-                ? (int) $columnData['NUMERIC_SCALE']
-                : null,
-            isPrimaryKey: ($columnData['IS_PRIMARY_KEY'] ?? 'NO') === 'YES',
-            isAutoIncrement: ($columnData['IS_IDENTITY'] ?? 0) == 1,
-            isUnique: false,
-            comment: null,
-            extra: []
-        );
-    }
+  protected function buildColumnSchema(array $columnData): ColumnSchema
+  {
+    return new ColumnSchema(
+      name: $columnData['COLUMN_NAME'],
+      type: $this->normalizeType($columnData['DATA_TYPE']),
+      nativeType: $columnData['DATA_TYPE'],
+      nullable: ($columnData['IS_NULLABLE'] ?? 'YES') === 'YES',
+      default: $columnData['COLUMN_DEFAULT'],
+      length: isset($columnData['CHARACTER_MAXIMUM_LENGTH'])
+        ? (int) $columnData['CHARACTER_MAXIMUM_LENGTH']
+        : null,
+      precision: isset($columnData['NUMERIC_PRECISION'])
+        ? (int) $columnData['NUMERIC_PRECISION']
+        : null,
+      scale: isset($columnData['NUMERIC_SCALE'])
+        ? (int) $columnData['NUMERIC_SCALE']
+        : null,
+      isPrimaryKey: ($columnData['IS_PRIMARY_KEY'] ?? 'NO') === 'YES',
+      isAutoIncrement: ($columnData['IS_IDENTITY'] ?? 0) == 1,
+      isUnique: false,
+      comment: null,
+      extra: []
+    );
+  }
 
-    /**
-     * Normalize SQL Server data type to a standard type.
-     */
-    private function normalizeType(string $sqlsrvType): string
-    {
-        $typeMap = [
-            'int' => 'integer',
-            'bigint' => 'bigint',
-            'smallint' => 'smallint',
-            'tinyint' => 'tinyint',
-            'bit' => 'boolean',
-            'decimal' => 'decimal',
-            'numeric' => 'decimal',
-            'money' => 'decimal',
-            'smallmoney' => 'decimal',
-            'float' => 'float',
-            'real' => 'float',
-            'char' => 'char',
-            'varchar' => 'varchar',
-            'nchar' => 'char',
-            'nvarchar' => 'varchar',
-            'text' => 'text',
-            'ntext' => 'text',
-            'binary' => 'blob',
-            'varbinary' => 'blob',
-            'image' => 'blob',
-            'date' => 'date',
-            'datetime' => 'datetime',
-            'datetime2' => 'datetime',
-            'smalldatetime' => 'datetime',
-            'datetimeoffset' => 'datetime',
-            'time' => 'time',
-            'uniqueidentifier' => 'uuid',
-            'xml' => 'text',
-        ];
+  /**
+   * Normalize SQL Server data type to a standard type.
+   */
+  private function normalizeType(string $sqlsrvType): string
+  {
+    $typeMap = [
+      'int' => 'integer',
+      'bigint' => 'bigint',
+      'smallint' => 'smallint',
+      'tinyint' => 'tinyint',
+      'bit' => 'boolean',
+      'decimal' => 'decimal',
+      'numeric' => 'decimal',
+      'money' => 'decimal',
+      'smallmoney' => 'decimal',
+      'float' => 'float',
+      'real' => 'float',
+      'char' => 'char',
+      'varchar' => 'varchar',
+      'nchar' => 'char',
+      'nvarchar' => 'varchar',
+      'text' => 'text',
+      'ntext' => 'text',
+      'binary' => 'blob',
+      'varbinary' => 'blob',
+      'image' => 'blob',
+      'date' => 'date',
+      'datetime' => 'datetime',
+      'datetime2' => 'datetime',
+      'smalldatetime' => 'datetime',
+      'datetimeoffset' => 'datetime',
+      'time' => 'time',
+      'uniqueidentifier' => 'uuid',
+      'xml' => 'text',
+    ];
 
-        return $typeMap[strtolower($sqlsrvType)] ?? $sqlsrvType;
-    }
+    return $typeMap[strtolower($sqlsrvType)] ?? $sqlsrvType;
+  }
 }

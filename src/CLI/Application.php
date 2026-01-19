@@ -19,59 +19,59 @@ use Mygra\CLI\Commands\InitCommand;
  */
 class Application extends SymfonyApplication
 {
-    public const VERSION = '2.0.0';
-    public const NAME = 'Mygra';
+  public const VERSION = '2.0.0';
+  public const NAME = 'Mygra';
 
-    public function __construct()
-    {
-        parent::__construct(self::NAME, self::VERSION);
+  public function __construct()
+  {
+    parent::__construct(self::NAME, self::VERSION);
 
-        $this->registerCommands();
+    $this->registerCommands();
+  }
+
+  /**
+   * Register all available commands.
+   */
+  private function registerCommands(): void
+  {
+    $this->addCommands([
+      new MigrateCommand(),
+      new InspectCommand(),
+      new ValidateCommand(),
+      new InitCommand(),
+    ]);
+  }
+
+  /**
+   * Get the application logo/banner.
+   */
+  public function getLongVersion(): string
+  {
+    return sprintf(
+      '<info>%s</info> <comment>v%s</comment> - Universal Database Migration Tool',
+      self::NAME,
+      self::VERSION
+    );
+  }
+
+  /**
+   * Override to add custom banner.
+   */
+  public function doRun(InputInterface $input, OutputInterface $output): int
+  {
+    if ($input->hasParameterOption(['--version', '-V'], true)) {
+      $output->writeln($this->getBanner());
     }
 
-    /**
-     * Register all available commands.
-     */
-    private function registerCommands(): void
-    {
-        $this->addCommands([
-            new MigrateCommand(),
-            new InspectCommand(),
-            new ValidateCommand(),
-            new InitCommand(),
-        ]);
-    }
+    return parent::doRun($input, $output);
+  }
 
-    /**
-     * Get the application logo/banner.
-     */
-    public function getLongVersion(): string
-    {
-        return sprintf(
-            '<info>%s</info> <comment>v%s</comment> - Universal Database Migration Tool',
-            self::NAME,
-            self::VERSION
-        );
-    }
-
-    /**
-     * Override to add custom banner.
-     */
-    public function doRun(InputInterface $input, OutputInterface $output): int
-    {
-        if ($input->hasParameterOption(['--version', '-V'], true)) {
-            $output->writeln($this->getBanner());
-        }
-
-        return parent::doRun($input, $output);
-    }
-
-    /**
-     * Get ASCII banner.
-     */
-    private function getBanner(): string
-    {
-        return <<<BANNER
+  /**
+   * Get ASCII banner.
+   */
+  private function getBanner(): string
+  {
+    return <<<BANNER
 <fg=cyan>
   __  __                       
  |  \/  |_   _  __ _ _ __ __ _ 
@@ -82,5 +82,5 @@ class Application extends SymfonyApplication
 </>
 <info>Universal Database Migration Tool</info> <comment>v2.0.0</comment>
 BANNER;
-    }
+  }
 }

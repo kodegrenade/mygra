@@ -14,23 +14,23 @@ declare(strict_types=1);
 
 // Find autoloader
 $autoloaderPaths = [
-    __DIR__ . '/../vendor/autoload.php',
-    __DIR__ . '/../../../autoload.php',
+  __DIR__ . '/../vendor/autoload.php',
+  __DIR__ . '/../../../autoload.php',
 ];
 
 $autoloaderFound = false;
 foreach ($autoloaderPaths as $path) {
-    if (file_exists($path)) {
-        require_once $path;
-        $autoloaderFound = true;
-        break;
-    }
+  if (file_exists($path)) {
+    require_once $path;
+    $autoloaderFound = true;
+    break;
+  }
 }
 
 if (!$autoloaderFound) {
-    fwrite(STDERR, "Error: Could not find Composer autoloader.\n");
-    fwrite(STDERR, "Please run 'composer install' first.\n");
-    exit(1);
+  fwrite(STDERR, "Error: Could not find Composer autoloader.\n");
+  fwrite(STDERR, "Please run 'composer install' first.\n");
+  exit(1);
 }
 
 use Mygra\CLI\Application;
