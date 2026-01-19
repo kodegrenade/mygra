@@ -19,7 +19,7 @@ use Mygra\CLI\Commands\InitCommand;
  */
 class Application extends SymfonyApplication
 {
-  public const VERSION = '2.0.0';
+  public const VERSION = '1.0.0';
   public const NAME = 'Mygra';
 
   public function __construct()
@@ -80,7 +80,7 @@ class Application extends SymfonyApplication
  |_|  |_|\__, |\__, |_|  \__,_|
          |___/ |___/           
 </>
-<info>Universal Database Migration Tool</info> <comment>v2.0.0</comment>
+<info>Universal Database Migration Tool</info> <comment>v1.0.0</comment>
 BANNER;
   }
 }
