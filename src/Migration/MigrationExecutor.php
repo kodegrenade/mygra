@@ -11,6 +11,7 @@ use Mygra\Logger\LoggerInterface;
 use Mygra\Logger\NullLogger;
 use Mygra\Schema\SchemaConverter;
 use Mygra\Validation\ValidationRunner;
+use Mygra\Transaction\TransactionManager;
 
 /**
  * Migration Executor
@@ -25,6 +26,7 @@ class MigrationExecutor
   private AdapterInterface $target;
   private TransformPipeline $pipeline;
   private ValidationRunner $validator;
+  private ?TransactionManager $transactionManager = null;
   private LoggerInterface $logger;
 
   private int $batchSize = 1000;
@@ -35,18 +37,19 @@ class MigrationExecutor
 
   /** @var callable|null */
   private $progressCallback = null;
-
   public function __construct(
     AdapterInterface $source,
     AdapterInterface $target,
     ?TransformPipeline $pipeline = null,
     ?ValidationRunner $validator = null,
+    ?TransactionManager $transactionManager = null,
     ?LoggerInterface $logger = null
   ) {
     $this->source = $source;
     $this->target = $target;
     $this->pipeline = $pipeline ?? TransformPipeline::withDefaults();
     $this->validator = $validator ?? ValidationRunner::withDefaults();
+    $this->transactionManager = $transactionManager ?? new TransactionManager($this->target, null, $logger);
     $this->logger = $logger ?? new NullLogger();
   }
 
@@ -136,8 +139,7 @@ class MigrationExecutor
 
       // Begin transaction if enabled
       if ($this->useTransactions && !$this->dryRun) {
-        $this->target->beginTransaction();
-        $this->logger->debug("Transaction started");
+        $this->transactionManager->begin();
       }
 
       $processedCount = 0;
@@ -178,6 +180,10 @@ class MigrationExecutor
           // Flush batch when full
           if (count($batch) >= $this->batchSize) {
             $inserted = $this->flushBatch($schema->targetTable, $batch);
+
+            // Record batch in journal if primary key is available
+            $this->recordBatchInJournal($schema, $batch);
+
             $insertedCount += $inserted;
             $processedCount += count($batch);
             $batch = [];
@@ -190,10 +196,7 @@ class MigrationExecutor
               $this->useTransactions && !$this->dryRun &&
               $processedCount % $this->savepointInterval === 0
             ) {
-              $savepointName = "sp_{$savepointCount}";
-              $this->target->savepoint($savepointName);
-              $savepointCount++;
-              $this->logger->debug("Created savepoint: {$savepointName}");
+              $this->transactionManager->checkpoint();
             }
           }
         } catch (\Exception $e) {
@@ -209,14 +212,14 @@ class MigrationExecutor
       // Flush remaining batch
       if (!empty($batch)) {
         $inserted = $this->flushBatch($schema->targetTable, $batch);
+        $this->recordBatchInJournal($schema, $batch);
         $insertedCount += $inserted;
         $processedCount += count($batch);
       }
 
       // Commit transaction
       if ($this->useTransactions && !$this->dryRun) {
-        $this->target->commit();
-        $this->logger->debug("Transaction committed");
+        $this->transactionManager->commit();
       }
 
       $result->setSuccess(true);
@@ -225,9 +228,8 @@ class MigrationExecutor
       $result->setErrorCount($errorCount);
     } catch (\Exception $e) {
       // Rollback on error
-      if ($this->useTransactions && !$this->dryRun && $this->target->inTransaction()) {
-        $this->target->rollback();
-        $this->logger->debug("Transaction rolled back");
+      if ($this->useTransactions && !$this->dryRun) {
+        $this->transactionManager->rollback();
       }
 
       $result->setSuccess(false);
@@ -408,5 +410,75 @@ class MigrationExecutor
   {
     $this->options = array_merge($this->options ?? [], $options);
     return $this;
+  }
+
+  /**
+   * Record a batch of inserts in the transaction journal.
+   */
+  private function recordBatchInJournal(SchemaConfig $schema, array $batch): void
+  {
+    if (!$this->transactionManager->getJournal() || empty($batch)) {
+      return;
+    }
+
+    // Try to determine primary key from target table
+    $targetSchema = $this->target->getTableSchema($schema->targetTable);
+    $pk = $targetSchema->primaryKey;
+
+    if (!$pk) {
+      return; // No primary key, can't reliably journal for rollback
+    }
+
+    $pkCols = is_array($pk) ? $pk : [$pk];
+    $primaryKeys = [];
+
+    foreach ($batch as $row) {
+      $keyData = [];
+      foreach ($pkCols as $col) {
+        if (!isset($row[$col])) {
+          return; // PK column missing in row, abort journaling for this batch
+        }
+        $keyData[$col] = $row[$col];
+      }
+      $primaryKeys[] = $keyData;
+    }
+
+    $this->transactionManager->recordBatch($schema->targetTable, $primaryKeys);
+  }
+
+  /**
+   * Recover from a failed/interrupted migration using the journal.
+   */
+  public function recovery(): void
+  {
+    if (!$this->transactionManager->needsRecovery()) {
+      $this->logger->info("No recovery needed.");
+      return;
+    }
+
+    $entries = $this->transactionManager->getJournal()->readEntries();
+    $this->logger->info("Starting recovery from journal (" . count($entries) . " entries)...");
+
+    foreach (array_reverse($entries) as $entry) {
+      if ($entry['type'] === 'BATCH_INSERT') {
+        $table = $entry['table'];
+        $keys = $entry['keys'];
+
+        $this->logger->info("Undoing batch insert in table '{$table}' (" . count($keys) . " rows)...");
+
+        foreach ($keys as $keyData) {
+          $conditions = [];
+          foreach ($keyData as $col => $val) {
+            $quotedVal = is_string($val) ? "'{$val}'" : $val;
+            $conditions[] = "{$this->target->quoteIdentifier($col)} = {$quotedVal}";
+          }
+          $sql = "DELETE FROM {$this->target->quoteIdentifier($table)} WHERE " . implode(' AND ', $conditions);
+          $this->target->execute($sql);
+        }
+      }
+    }
+
+    $this->transactionManager->getJournal()->complete();
+    $this->logger->info("Recovery completed successfully.");
   }
 }

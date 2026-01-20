@@ -17,6 +17,8 @@ use Mygra\Adapters\AdapterFactory;
 use Mygra\Migration\MigrationExecutor;
 use Mygra\Transform\TransformPipeline;
 use Mygra\Logger\FileLogger;
+use Mygra\Transaction\RollbackJournal;
+use Mygra\Transaction\TransactionManager;
 
 /**
  * Migrate Command
@@ -64,6 +66,13 @@ class MigrateCommand extends Command
         null,
         InputOption::VALUE_NONE,
         'Automatically create target table if missing'
+      )
+      ->addOption(
+        'journal',
+        'j',
+        InputOption::VALUE_OPTIONAL,
+        'Enable rollback journaling',
+        'logs/rollback.journal'
       )
       ->addOption(
         'no-progress',
@@ -140,10 +149,20 @@ HELP
     $logger = new FileLogger($logFile);
 
     // Create migration executor
+    $journalFile = $input->getOption('journal') ?? $config->get('settings.journal_file');
+    $transactionManager = null;
+
+    if ($journalFile) {
+      $journal = new RollbackJournal($journalFile);
+      $transactionManager = new TransactionManager($targetAdapter, $journal, $logger);
+    }
+
     $executor = new MigrationExecutor(
       $sourceAdapter,
       $targetAdapter,
       TransformPipeline::withDefaults(),
+      null,
+      $transactionManager,
       $logger
     );
 
