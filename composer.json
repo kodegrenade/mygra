@@ -40,7 +40,7 @@
     "bin/mygra"
   ],
   "scripts": {
-    "test": "phpunit",
+    "test": "./vendor/bin/phpunit tests/Unit",
     "migrate": "php bin/mygra migrate"
   },
   "config": {
