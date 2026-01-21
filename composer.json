@@ -37,11 +37,11 @@
     "phpunit/phpunit": "^10.0"
   },
   "bin": [
-    "bin/mygra"
+    "mygra"
   ],
   "scripts": {
     "test": "./vendor/bin/phpunit tests/Unit",
-    "migrate": "php bin/mygra migrate"
+    "migrate": "php mygra migrate"
   },
   "config": {
     "optimize-autoloader": true,

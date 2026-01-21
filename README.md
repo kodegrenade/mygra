@@ -52,7 +52,7 @@ chmod +x bin/mygra
 Run the wizard to create your first `mygra.yaml`:
 
 ```bash
-php bin/mygra init
+php mygra init
 ```
 
 ### 2. Compare Schemas
@@ -60,7 +60,7 @@ php bin/mygra init
 See what's missing in your target database:
 
 ```bash
-php bin/mygra compare --schema=users
+php mygra compare --schema=users
 ```
 
 ### 3. Run Migration
@@ -68,7 +68,7 @@ php bin/mygra compare --schema=users
 Execute the migration with progress tracking:
 
 ```bash
-php bin/mygra migrate --schema=users --create
+php mygra migrate --schema=users --create
 ```
 
 ## Configuration

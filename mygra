@@ -7,14 +7,14 @@ declare(strict_types=1);
  * Mygra CLI - Universal Database Migration Tool
  * 
  * Usage:
- *   php bin/mygra migrate --config=config/mygra.yaml --schema=users
- *   php bin/mygra inspect --connection=source users
- *   php bin/mygra diff --source=users --target=wp_users
+ *   php mygra migrate --config=config/mygra.yaml --schema=users
+ *   php mygra inspect --connection=source users
+ *   php mygra suggest source_table target_table
  */
 
 // Find autoloader
 $autoloaderPaths = [
-  __DIR__ . '/../vendor/autoload.php',
+  __DIR__ . '/vendor/autoload.php',
   __DIR__ . '/../../../autoload.php',
 ];
 
