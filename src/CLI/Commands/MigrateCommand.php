@@ -93,16 +93,16 @@ The <info>migrate</info> command executes database migrations.
 <comment>Examples:</comment>
 
   Migrate all schemas:
-    <info>php bin/mygra migrate --config=config/mygra.yaml</info>
+    <info>php mygra migrate --config=config/mygra.yaml</info>
 
   Migrate a specific schema:
-    <info>php bin/mygra migrate --schema=users</info>
+    <info>php mygra migrate --schema=users</info>
 
   Dry run (preview only):
-    <info>php bin/mygra migrate --schema=users --dry-run</info>
+    <info>php mygra migrate --schema=users --dry-run</info>
 
   Custom batch size:
-    <info>php bin/mygra migrate --batch-size=5000</info>
+    <info>php mygra migrate --batch-size=5000</info>
 HELP
       );
   }
@@ -144,7 +144,7 @@ HELP
     // Setup logger
     $logFile = $input->getOption('log-file')
       ?? $config->get('settings.log_file')
-      ?? 'logs/migration_' . date('Ymd_His') . '.log';
+      ?? 'logs/migration_{date}.log';
 
     $logger = new FileLogger($logFile);
 

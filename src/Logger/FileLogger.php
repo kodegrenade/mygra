@@ -97,8 +97,33 @@ class FileLogger implements LoggerInterface
     // Format the log entry
     $entry = $this->formatEntry($level, $message);
 
+    // Resolve dynamic log file path
+    $resolvedLogFile = $this->resolveLogPath($level);
+
+    // Ensure directory exists for resolved path
+    $dir = dirname($resolvedLogFile);
+    if (!is_dir($dir)) {
+      mkdir($dir, 0777, true);
+    }
+
     // Write to file
-    file_put_contents($this->logFile, $entry, FILE_APPEND | LOCK_EX);
+    file_put_contents($resolvedLogFile, $entry, FILE_APPEND | LOCK_EX);
+  }
+
+  /**
+   * Resolve dynamic placeholders in the log path.
+   */
+  private function resolveLogPath(string $level): string
+  {
+    $replacements = [
+      '{date}' => date('Y-m-d'),
+      '{level}' => $level,
+      '{year}' => date('Y'),
+      '{month}' => date('m'),
+      '{day}' => date('d'),
+    ];
+
+    return strtr($this->logFile, $replacements);
   }
 
   /**
