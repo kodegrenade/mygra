@@ -48,10 +48,10 @@ The <info>validate</info> command checks your configuration and database connect
 <comment>Examples:</comment>
 
   Validate configuration:
-    <info>php bin/mygra validate</info>
+    <info>php mygra validate</info>
 
   Validate specific schema:
-    <info>php bin/mygra validate --schema=users</info>
+    <info>php mygra validate --schema=users</info>
 HELP
       );
   }

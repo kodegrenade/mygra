@@ -42,7 +42,7 @@ composer install
 
 ### 3. Make CLI executable
 ```bash
-chmod +x bin/mygra
+chmod +x mygra
 ```
 
 ## Quick Start

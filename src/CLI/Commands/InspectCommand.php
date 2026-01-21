@@ -85,16 +85,16 @@ The <info>inspect</info> command displays database schema information.
 <comment>Examples:</comment>
 
   List all tables:
-    <info>php bin/mygra inspect</info>
+    <info>php mygra inspect</info>
 
   Inspect a specific table:
-    <info>php bin/mygra inspect users</info>
+    <info>php mygra inspect users</info>
 
   Use target connection:
-    <info>php bin/mygra inspect users --connection=target</info>
+    <info>php mygra inspect users --connection=target</info>
 
   Direct connection (without config):
-    <info>php bin/mygra inspect -d mysql -H localhost -D mydb -u root</info>
+    <info>php mygra inspect -d mysql -H localhost -D mydb -u root</info>
 HELP
       );
   }

@@ -49,13 +49,13 @@ The <info>init</info> command creates a new migration configuration file interac
 <comment>Examples:</comment>
 
   Create default configuration:
-    <info>php bin/mygra init</info>
+    <info>php mygra init</info>
 
   Create configuration in JSON format:
-    <info>php bin/mygra init --format=json</info>
+    <info>php mygra init --format=json</info>
 
   Custom output path:
-    <info>php bin/mygra init --output=my-migration.yaml</info>
+    <info>php mygra init --output=my-migration.yaml</info>
 HELP
       );
   }
@@ -161,9 +161,9 @@ HELP
     $io->note([
       "Next steps:",
       "1. Edit the configuration file to add field mappings",
-      "2. Run 'php bin/mygra validate' to check your configuration",
-      "3. Run 'php bin/mygra migrate --dry-run' to preview the migration",
-      "4. Run 'php bin/mygra migrate' to execute the migration",
+      "2. Run 'php mygra validate' to check your configuration",
+      "3. Run 'php mygra migrate --dry-run' to preview the migration",
+      "4. Run 'php mygra migrate' to execute the migration",
     ]);
 
     return Command::SUCCESS;
