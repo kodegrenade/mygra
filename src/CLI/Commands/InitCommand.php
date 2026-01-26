@@ -64,7 +64,7 @@ HELP
   {
     $io = new SymfonyStyle($input, $output);
 
-    $io->title('🧙 Mygra Configuration Wizard');
+    $io->title('Mygra Configuration Wizard');
 
     $helper = $this->getHelper('question');
 

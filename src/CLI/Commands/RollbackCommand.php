@@ -32,7 +32,7 @@ class RollbackCommand extends Command
   protected function execute(InputInterface $input, OutputInterface $output): int
   {
     $io = new SymfonyStyle($input, $output);
-    $io->title('🚀 Mygra Rollback & Recovery');
+    $io->title('Mygra Rollback & Recovery');
 
     $configFile = $input->getOption('config');
     if (!file_exists($configFile)) {

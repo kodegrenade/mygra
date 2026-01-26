@@ -111,7 +111,7 @@ HELP
   {
     $io = new SymfonyStyle($input, $output);
 
-    $io->title('🚀 Mygra Database Migration');
+    $io->title('Mygra Database Migration');
 
     // Load configuration
     $configPath = $input->getOption('config');
