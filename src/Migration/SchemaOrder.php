@@ -18,7 +18,8 @@ class SchemaOrder
 {
   /**
    * @param SchemaConfig[] $schemas In config order
-   * @return array{0: SchemaConfig[], 1: string[]} [ordered schemas, names of schemas in a dependency cycle]
+   * @return array{0: SchemaConfig[], 1: string[], 2: array<string, string[]>}
+   *   [ordered schemas, names of schemas in a dependency cycle, name => names it depends on]
    */
   public static function sort(array $schemas, AdapterInterface $source): array
   {
@@ -53,21 +54,22 @@ class SchemaOrder
 
     // Repeatedly take the first schema (in config order) whose parents are all placed
     $ordered = [];
-    while ($deps) {
-      $ready = array_key_first(array_filter($deps, fn($parents) => !array_diff($parents, array_keys($ordered))));
+    $pending = $deps;
+    while ($pending) {
+      $ready = array_key_first(array_filter($pending, fn($parents) => !array_diff($parents, array_keys($ordered))));
       if ($ready === null) {
         break;
       }
       $ordered[$ready] = $byName[$ready];
-      unset($deps[$ready]);
+      unset($pending[$ready]);
     }
 
     // Whatever is left is in a cycle: keep config order, report it
-    $cyclic = array_keys($deps);
+    $cyclic = array_keys($pending);
     foreach ($cyclic as $name) {
       $ordered[$name] = $byName[$name];
     }
 
-    return [array_values($ordered), $cyclic];
+    return [array_values($ordered), $cyclic, $deps];
   }
 }

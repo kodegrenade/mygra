@@ -135,7 +135,7 @@ schemas:
       depends_on: [users]
 ```
 
-Schemas in a dependency cycle keep their config order and are reported as a warning.
+If a schema fails, every schema that depends on it (directly or further down the chain) is skipped, so children never reference parent rows that didn't arrive. Independent schemas still run. Schemas in a dependency cycle keep their config order and are reported as a warning.
 
 ## Commands
 

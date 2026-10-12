@@ -15,6 +15,7 @@ use Symfony\Component\Console\Attribute\AsCommand;
 use Mygra\Config\ConfigLoader;
 use Mygra\Adapters\AdapterFactory;
 use Mygra\Migration\MigrationExecutor;
+use Mygra\Migration\MigrationResult;
 use Mygra\Migration\SchemaOrder;
 use Mygra\Transform\TransformPipeline;
 use Mygra\Logger\FileLogger;
@@ -186,9 +187,10 @@ HELP
     }
 
     // Parents before children (foreign keys and options.depends_on)
+    $deps = [];
     if (!$schemaName) {
       try {
-        [$schemas, $cyclic] = SchemaOrder::sort($schemas, $sourceAdapter);
+        [$schemas, $cyclic, $deps] = SchemaOrder::sort($schemas, $sourceAdapter);
       } catch (\InvalidArgumentException $e) {
         $io->error($e->getMessage());
         return Command::FAILURE;
@@ -203,10 +205,23 @@ HELP
     // Execute migrations
     $results = [];
     $totalSuccess = true;
+    $failed = []; // failed or skipped schemas; their dependents are skipped too
 
     foreach ($schemas as $schema) {
       $io->section("Migrating: {$schema->name}");
       $io->text("Source: {$schema->sourceTable} → Target: {$schema->targetTable}");
+
+      // Children of a failed parent would reference rows that never arrived
+      $failedParents = array_intersect($deps[$schema->name] ?? [], $failed);
+      if ($failedParents) {
+        $result = new MigrationResult($schema->name);
+        $result->setError('Skipped: depends on failed ' . implode(', ', $failedParents));
+        $results[] = $result;
+        $failed[] = $schema->name;
+        $totalSuccess = false;
+        $io->error($result->getError());
+        continue;
+      }
 
       // Setup progress bar
       $progressBar = null;
@@ -233,6 +248,7 @@ HELP
       if (!$result->isSuccess()) {
         $io->error("Migration failed: " . $result->getError());
         $totalSuccess = false;
+        $failed[] = $schema->name;
       } elseif ($result->getErrorCount() > 0) {
         $io->warning("{$result->getSummary()}\n{$result->getErrorCount()} rows skipped due to errors. Check log for details.");
         $totalSuccess = false;
