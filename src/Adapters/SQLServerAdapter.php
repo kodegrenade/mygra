@@ -274,7 +274,7 @@ class SQLServerAdapter extends AbstractAdapter
     );
     $identityInsert = !empty($identity) && in_array($identity[0]['name'], $columns, true);
     if ($identityInsert) {
-      $this->execute("SET IDENTITY_INSERT {$qualified} ON");
+      $this->enableIdentityInsert($table);
     }
 
     $columnList = implode(', ', array_map([$this, 'quoteIdentifier'], $columns));
@@ -296,7 +296,7 @@ class SQLServerAdapter extends AbstractAdapter
       }
     } finally {
       if ($identityInsert) {
-        $this->execute("SET IDENTITY_INSERT {$qualified} OFF");
+        $this->disableIdentityInsert($table);
       }
     }
 
@@ -448,11 +448,14 @@ class SQLServerAdapter extends AbstractAdapter
 
   /**
    * Enable IDENTITY_INSERT for a table.
+   *
+   * Uses PDO::exec (direct execution): through a prepared statement (sp_prepexec)
+   * the SET reverts as soon as that call ends.
    */
   public function enableIdentityInsert(string $table): void
   {
     $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-    $this->execute("SET IDENTITY_INSERT {$quotedTable} ON");
+    $this->getPdo()->exec("SET IDENTITY_INSERT {$quotedTable} ON");
   }
 
   /**
@@ -461,7 +464,7 @@ class SQLServerAdapter extends AbstractAdapter
   public function disableIdentityInsert(string $table): void
   {
     $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-    $this->execute("SET IDENTITY_INSERT {$quotedTable} OFF");
+    $this->getPdo()->exec("SET IDENTITY_INSERT {$quotedTable} OFF");
   }
 
   // =========================================================================
