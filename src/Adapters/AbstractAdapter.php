@@ -19,6 +19,12 @@ abstract class AbstractAdapter implements AdapterInterface
   protected array $config = [];
   protected string $driver = '';
 
+  /** Most parameters one statement may bind (MySQL and PostgreSQL: 65535) */
+  protected int $maxParams = 65535;
+
+  /** Most rows one multi-row INSERT may hold */
+  protected int $maxRowsPerInsert = PHP_INT_MAX;
+
   // =========================================================================
   // Connection Management
   // =========================================================================
@@ -134,22 +140,28 @@ abstract class AbstractAdapter implements AdapterInterface
     $quotedTable = $this->quoteIdentifier($table);
     $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
     $columnList = implode(', ', $quotedColumns);
-
-    // Build placeholders for each row
     $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-    $placeholders = implode(', ', array_fill(0, count($rows), $placeholderRow));
 
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
+    // Wide tables: keep rows x columns under the driver's parameter limit
+    $chunkSize = max(1, min($this->maxRowsPerInsert, intdiv($this->maxParams, count($columns))));
+    $totalInserted = 0;
 
-    // Flatten the rows array for binding
-    $values = [];
-    foreach ($rows as $row) {
-      foreach ($columns as $col) {
-        $values[] = $row[$col] ?? null;
+    foreach (array_chunk($rows, $chunkSize) as $chunk) {
+      $placeholders = implode(', ', array_fill(0, count($chunk), $placeholderRow));
+      $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
+
+      // Flatten the rows array for binding
+      $values = [];
+      foreach ($chunk as $row) {
+        foreach ($columns as $col) {
+          $values[] = $row[$col] ?? null;
+        }
       }
+
+      $totalInserted += $this->execute($sql, $values);
     }
 
-    return $this->execute($sql, $values);
+    return $totalInserted;
   }
 
   public function getRowCount(string $table, ?string $where = null): int

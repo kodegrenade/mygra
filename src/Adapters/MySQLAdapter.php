@@ -235,33 +235,6 @@ class MySQLAdapter extends AbstractAdapter
   // Batch Operations (Optimized for MySQL)
   // =========================================================================
 
-  public function batchInsert(string $table, array $columns, array $rows): int
-  {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    // Use multi-row INSERT for efficiency
-    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-    $placeholders = implode(', ', array_fill(0, count($rows), $placeholderRow));
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-    // Flatten the rows array for binding
-    $values = [];
-    foreach ($rows as $row) {
-      foreach ($columns as $col) {
-        $values[] = $row[$col] ?? null;
-      }
-    }
-
-    return $this->execute($sql, $values);
-  }
-
   /**
    * Batch insert with ON DUPLICATE KEY UPDATE support.
    */

@@ -17,6 +17,12 @@ class SQLiteAdapter extends AbstractAdapter
 {
   protected string $driver = 'sqlite';
 
+  /** SQLITE_MAX_VARIABLE_NUMBER (default since SQLite 3.32) */
+  protected int $maxParams = 32766;
+
+  /** SQLITE_MAX_COMPOUND_SELECT default */
+  protected int $maxRowsPerInsert = 500;
+
   // =========================================================================
   // Connection Management
   // =========================================================================
@@ -159,39 +165,6 @@ class SQLiteAdapter extends AbstractAdapter
   // =========================================================================
   // Batch Operations
   // =========================================================================
-
-  public function batchInsert(string $table, array $columns, array $rows): int
-  {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    // SQLite has a limit on compound INSERT, so we batch appropriately
-    $maxBatchSize = 500; // SQLite's SQLITE_MAX_COMPOUND_SELECT default is 500
-    $totalInserted = 0;
-
-    foreach (array_chunk($rows, $maxBatchSize) as $batch) {
-      $quotedTable = $this->quoteIdentifier($table);
-      $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-      $columnList = implode(', ', $quotedColumns);
-
-      $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-      $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
-
-      $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-      $values = [];
-      foreach ($batch as $row) {
-        foreach ($columns as $col) {
-          $values[] = $row[$col] ?? null;
-        }
-      }
-
-      $totalInserted += $this->execute($sql, $values);
-    }
-
-    return $totalInserted;
-  }
 
   /**
    * Batch insert with INSERT OR REPLACE (upsert) support.

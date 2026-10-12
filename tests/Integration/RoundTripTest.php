@@ -196,6 +196,26 @@ class RoundTripTest extends TestCase
   }
 
   #[DataProvider('databases')]
+  public function testWideTableInsert(string $envVar)
+  {
+    $config = json_decode((string) getenv($envVar), true);
+    if (!$config) {
+      $this->markTestSkipped("{$envVar} not set");
+    }
+
+    // 1000 rows x 70 columns = 70,000 parameters: over MySQL's and PostgreSQL's 65,535, SQL Server's 2,100
+    $db = AdapterFactory::create($config);
+    $columns = array_map(fn($i) => "c{$i}", range(0, 69));
+    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_wide'));
+    $db->execute("CREATE TABLE mygra_it_wide (" . implode(', ', array_map(fn($c) => "{$c} INT", $columns)) . ")");
+
+    $rows = array_map(fn($r) => array_fill_keys($columns, $r), range(1, 1000));
+    $db->batchInsert('mygra_it_wide', $columns, $rows);
+
+    $this->assertSame(1000, $db->getRowCount('mygra_it_wide'));
+  }
+
+  #[DataProvider('databases')]
   public function testForeignKeysOrderSchemas(string $envVar)
   {
     $config = json_decode((string) getenv($envVar), true);
