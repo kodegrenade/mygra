@@ -56,6 +56,15 @@ class TransformPipeline
   }
 
   /**
+   * Remove all field-specific transformer configurations.
+   */
+  public function clearFieldTransformers(): self
+  {
+    $this->fieldTransformers = [];
+    return $this;
+  }
+
+  /**
    * Add a row transformer (operates on entire row).
    *
    * @param string $name Unique name for this row transformer

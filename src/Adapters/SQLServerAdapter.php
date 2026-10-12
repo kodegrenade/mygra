@@ -258,8 +258,8 @@ class SQLServerAdapter extends AbstractAdapter
       return 0;
     }
 
-    // SQL Server has a limit of 1000 rows per INSERT
-    $maxBatchSize = 1000;
+    // SQL Server allows at most 1000 rows per INSERT and 2100 parameters per statement
+    $maxBatchSize = max(1, min(1000, intdiv(2100, count($columns))));
     $totalInserted = 0;
 
     foreach (array_chunk($rows, $maxBatchSize) as $batch) {

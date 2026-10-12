@@ -52,8 +52,7 @@ class MigrateCommand extends Command
         'batch-size',
         'b',
         InputOption::VALUE_REQUIRED,
-        'Number of rows per batch',
-        1000
+        'Number of rows per batch (default: settings.batch_size or 1000)'
       )
       ->addOption(
         'dry-run',
@@ -166,10 +165,11 @@ HELP
       $logger
     );
 
-    $executor->setBatchSize((int) $input->getOption('batch-size'));
+    $executor->setBatchSize((int) ($input->getOption('batch-size') ?? $config->get('settings.batch_size') ?? 1000));
     $executor->setDryRun((bool) $input->getOption('dry-run'));
     $executor->setOptions([
-      'auto_create' => $input->getOption('create')
+      'auto_create' => $input->getOption('create'),
+      'on_error' => $config->get('settings.on_error', 'skip'),
     ]);
 
     if ($input->getOption('dry-run')) {
@@ -220,17 +220,15 @@ HELP
         $output->writeln('');
       }
 
-      // Display result
-      if ($result->isSuccess()) {
-        $io->success($result->getSummary());
-      } else {
+      // Display result; skipped rows are a failure, not a success
+      if (!$result->isSuccess()) {
         $io->error("Migration failed: " . $result->getError());
         $totalSuccess = false;
-      }
-
-      // Show errors if any
-      if ($result->getErrorCount() > 0) {
-        $io->warning("Encountered {$result->getErrorCount()} row errors. Check log for details.");
+      } elseif ($result->getErrorCount() > 0) {
+        $io->warning("{$result->getSummary()}\n{$result->getErrorCount()} rows skipped due to errors. Check log for details.");
+        $totalSuccess = false;
+      } else {
+        $io->success($result->getSummary());
       }
     }
 
@@ -241,7 +239,7 @@ HELP
     foreach ($results as $result) {
       $summaryRows[] = [
         $result->getSchemaName(),
-        $result->isSuccess() ? '<info>✓</info>' : '<error>✗</error>',
+        $result->isSuccess() && $result->getErrorCount() === 0 ? '<info>✓</info>' : '<error>✗</error>',
         $result->getProcessedRows(),
         $result->getInsertedRows(),
         $result->getErrorCount(),

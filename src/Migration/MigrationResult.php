@@ -224,7 +224,11 @@ class MigrationResult
    */
   public function getSummary(): string
   {
-    $status = $this->success ? '✓ Success' : '✗ Failed';
+    $status = match (true) {
+      !$this->success => '✗ Failed',
+      $this->errorCount > 0 => '⚠ Completed with errors',
+      default => '✓ Success',
+    };
 
     return sprintf(
       "%s | Processed: %d/%d | Inserted: %d | Errors: %d | Duration: %s",

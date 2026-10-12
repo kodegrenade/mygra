@@ -146,66 +146,65 @@ class MigrationExecutor
       $insertedCount = 0;
       $errorCount = 0;
       $batch = [];
-      $savepointCount = 0;
+
+      $onError = $schema->getOption('on_error', $this->options['on_error'] ?? 'skip');
+      $fieldMap = $schema->fields + $this->joinFieldMap($schema->joins);
 
       // Stream rows from source
       foreach ($this->source->streamQuery($query) as $row) {
+        // Only transform/validate errors are row-level; insert errors fail the migration
+        $errorMsg = null;
         try {
-          // Transform the row
-          $transformed = $this->pipeline->process($row, $schema->fields);
+          $transformed = $this->pipeline->process($row, $fieldMap);
 
-          // Validate the transformed row
           if (!empty($schema->validations)) {
             $validation = $this->validator->validateRow($transformed, $schema->validations);
             if (!$validation->isValid()) {
-              $errorCount++;
               $errorMsg = "Validation failed: " . $validation->getFormattedErrors();
-              $result->addError([
-                'row' => $row,
-                'error' => $errorMsg,
-              ]);
-              $this->logger->warning("Row validation error: {$errorMsg}");
-
-              $onError = $schema->getOption('on_error', $this->options['on_error'] ?? 'skip');
-              if ($onError === 'abort') {
-                throw new \Exception("Migration aborted due to validation error: {$errorMsg}");
-              }
-
-              continue; // Skip this row
-            }
-          }
-
-          $batch[] = $transformed;
-
-          // Flush batch when full
-          if (count($batch) >= $this->batchSize) {
-            $inserted = $this->flushBatch($schema->targetTable, $batch);
-
-            // Record batch in journal if primary key is available
-            $this->recordBatchInJournal($schema, $batch);
-
-            $insertedCount += $inserted;
-            $processedCount += count($batch);
-            $batch = [];
-
-            // Report progress
-            $this->reportProgress($processedCount, $totalRows, "Processing...");
-
-            // Create savepoint at intervals
-            if (
-              $this->useTransactions && !$this->dryRun &&
-              $processedCount % $this->savepointInterval === 0
-            ) {
-              $this->transactionManager->checkpoint();
             }
           }
         } catch (\Exception $e) {
+          $errorMsg = $e->getMessage();
+        }
+
+        if ($errorMsg !== null) {
           $errorCount++;
           $result->addError([
             'row' => $row,
-            'error' => $e->getMessage(),
+            'error' => $errorMsg,
           ]);
-          $this->logger->warning("Row error: {$e->getMessage()}");
+          $this->logger->warning("Row error: {$errorMsg}");
+
+          if ($onError === 'abort' || $onError === 'rollback') {
+            throw new \RuntimeException("Migration aborted on row error: {$errorMsg}");
+          }
+
+          continue; // Skip this row
+        }
+
+        $batch[] = $transformed;
+
+        // Flush batch when full
+        if (count($batch) >= $this->batchSize) {
+          $inserted = $this->flushBatch($schema->targetTable, $batch);
+
+          // Record batch in journal if primary key is available
+          $this->recordBatchInJournal($schema, $batch);
+
+          $insertedCount += $inserted;
+          $processedCount += count($batch);
+          $batch = [];
+
+          // Report progress
+          $this->reportProgress($processedCount, $totalRows, "Processing...");
+
+          // Create savepoint at intervals
+          if (
+            $this->useTransactions && !$this->dryRun &&
+            $processedCount % $this->savepointInterval === 0
+          ) {
+            $this->transactionManager->checkpoint();
+          }
         }
       }
 
@@ -234,6 +233,7 @@ class MigrationExecutor
 
       $result->setSuccess(false);
       $result->setError($e->getMessage());
+      $result->setErrorCount($errorCount ?? 0);
       $this->logger->error("Migration failed: {$e->getMessage()}");
     }
 
@@ -327,9 +327,26 @@ class MigrationExecutor
    */
   private function configureTransforms(SchemaConfig $schema): void
   {
+    // Pipeline is shared across schemas; drop the previous schema's field transforms
+    $this->pipeline->clearFieldTransformers();
     foreach ($schema->transforms as $field => $transforms) {
       $this->pipeline->forField($field, $transforms);
     }
+  }
+
+  /**
+   * Map join fields (selected AS their target name) through the pipeline unchanged.
+   */
+  private function joinFieldMap(array $joins): array
+  {
+    $map = [];
+    foreach ($joins as $join) {
+      foreach ($join['fields'] as $targetField) {
+        $map[$targetField] = $targetField;
+      }
+      $map += $this->joinFieldMap($join['join']);
+    }
+    return $map;
   }
 
   /**
@@ -468,12 +485,11 @@ class MigrationExecutor
 
         foreach ($keys as $keyData) {
           $conditions = [];
-          foreach ($keyData as $col => $val) {
-            $quotedVal = is_string($val) ? "'{$val}'" : $val;
-            $conditions[] = "{$this->target->quoteIdentifier($col)} = {$quotedVal}";
+          foreach (array_keys($keyData) as $col) {
+            $conditions[] = "{$this->target->quoteIdentifier($col)} = ?";
           }
           $sql = "DELETE FROM {$this->target->quoteIdentifier($table)} WHERE " . implode(' AND ', $conditions);
-          $this->target->execute($sql);
+          $this->target->execute($sql, array_values($keyData));
         }
       }
     }

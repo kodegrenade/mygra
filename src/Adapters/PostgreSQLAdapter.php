@@ -254,35 +254,6 @@ class PostgreSQLAdapter extends AbstractAdapter
   // Batch Operations (PostgreSQL Optimized)
   // =========================================================================
 
-  public function batchInsert(string $table, array $columns, array $rows): int
-  {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    // PostgreSQL uses $1, $2, etc for placeholders
-    $paramIndex = 1;
-    $rowPlaceholders = [];
-    $values = [];
-
-    foreach ($rows as $row) {
-      $placeholders = [];
-      foreach ($columns as $col) {
-        $placeholders[] = '$' . $paramIndex++;
-        $values[] = $row[$col] ?? null;
-      }
-      $rowPlaceholders[] = '(' . implode(', ', $placeholders) . ')';
-    }
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES " . implode(', ', $rowPlaceholders);
-
-    return $this->execute($sql, $values);
-  }
-
   /**
    * Batch insert with ON CONFLICT (upsert) support.
    */
@@ -301,17 +272,15 @@ class PostgreSQLAdapter extends AbstractAdapter
     $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
     $columnList = implode(', ', $quotedColumns);
 
-    $paramIndex = 1;
-    $rowPlaceholders = [];
+    // PDO binds ? / :name only, not $1-style placeholders
+    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+    $rowPlaceholders = array_fill(0, count($rows), $placeholderRow);
     $values = [];
 
     foreach ($rows as $row) {
-      $placeholders = [];
       foreach ($columns as $col) {
-        $placeholders[] = '$' . $paramIndex++;
         $values[] = $row[$col] ?? null;
       }
-      $rowPlaceholders[] = '(' . implode(', ', $placeholders) . ')';
     }
 
     $conflictList = implode(', ', array_map([$this, 'quoteIdentifier'], $conflictColumns));

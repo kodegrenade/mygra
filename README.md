@@ -96,7 +96,8 @@ schemas:
       user_login: username
       user_email: email
     transforms:
-      email: [email_lower]
+      email:
+        - { transformer: string, options: { case: lower } }
     validations:
       email:
         - { validator: email }
