@@ -446,6 +446,19 @@ class SQLServerAdapter extends AbstractAdapter
     return array_column($result, 'SCHEMA_NAME');
   }
 
+  public function reserveIds(string $table, int $next): void
+  {
+    $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $current = $this->query("SELECT IDENT_CURRENT(?) AS cur", [$qualified])[0]['cur'] ?? null;
+
+    // No identity column, or already far enough; RESEED can also move it backwards, so never lower it
+    if ($current === null || (int) $current >= $next) {
+      return;
+    }
+    // Reseed to $next, not $next - 1: on a table that never had rows the next ID is the reseed value itself
+    $this->getPdo()->exec("DBCC CHECKIDENT ({$this->quote($qualified)}, RESEED, {$next})");
+  }
+
   /**
    * Enable IDENTITY_INSERT for a table.
    *

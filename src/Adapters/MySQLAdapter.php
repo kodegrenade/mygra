@@ -55,6 +55,12 @@ class MySQLAdapter extends AbstractAdapter
     $this->pdo->exec("SET sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'");
   }
 
+  public function reserveIds(string $table, int $next): void
+  {
+    // InnoDB never sets the counter below MAX(id) + 1, so this cannot move it backwards past used IDs
+    $this->getPdo()->exec("ALTER TABLE {$this->quoteIdentifier($table)} AUTO_INCREMENT = {$next}");
+  }
+
   /**
    * PDO::MYSQL_ATTR_USE_BUFFERED_QUERY is deprecated in PHP 8.5; Pdo\Mysql only exists from 8.4.
    */

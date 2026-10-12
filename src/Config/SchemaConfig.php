@@ -20,7 +20,9 @@ class SchemaConfig
     public readonly array $validations = [],
     public readonly ?string $where = null,
     public readonly array $joins = [],
-    public readonly array $options = []
+    public readonly array $options = [],
+    /** @var array<string, array{schema: string, on_missing: string}> target column => parent schema */
+    public readonly array $references = []
   ) {}
 
   /**
@@ -37,7 +39,8 @@ class SchemaConfig
       validations: $config['validations'] ?? [],
       where: $config['where'] ?? null,
       joins: self::normalizeJoins($config['joins'] ?? $config['join'] ?? []),
-      options: $config['options'] ?? []
+      options: $config['options'] ?? [],
+      references: self::normalizeReferences($config['references'] ?? [])
     );
   }
 
@@ -128,7 +131,25 @@ class SchemaConfig
       'where' => $this->where,
       'joins' => $this->joins,
       'options' => $this->options,
+      'references' => $this->references,
     ];
+  }
+
+  /**
+   * Normalize references: `author_id: users` or `author_id: { schema: users, on_missing: null }`.
+   */
+  private static function normalizeReferences(array $references): array
+  {
+    $normalized = [];
+    foreach ($references as $column => $ref) {
+      $ref = is_string($ref) ? ['schema' => $ref] : $ref;
+      $onMissing = $ref['on_missing'] ?? 'error';
+      if (!in_array($onMissing, ['error', 'null'], true)) {
+        throw new \InvalidArgumentException("references.{$column}.on_missing must be error or null, got '{$onMissing}'");
+      }
+      $normalized[$column] = ['schema' => $ref['schema'], 'on_missing' => $onMissing];
+    }
+    return $normalized;
   }
 
   /**

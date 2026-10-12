@@ -12,7 +12,8 @@ use Mygra\Config\SchemaConfig;
  *
  * Orders schemas so parents migrate before children. A schema depends on another when
  * its source table has a foreign key to the other's source table, or when it lists the
- * other in `options.depends_on` (for sources without declared foreign keys, e.g. MyISAM).
+ * other in `options.depends_on` (for sources without declared foreign keys, e.g. MyISAM)
+ * or in `references`.
  */
 class SchemaOrder
 {
@@ -41,7 +42,8 @@ class SchemaOrder
         }
       }
 
-      foreach ((array) $schema->getOption('depends_on', []) as $parent) {
+      $declared = [...(array) $schema->getOption('depends_on', []), ...array_column($schema->references, 'schema')];
+      foreach ($declared as $parent) {
         if (!isset($byName[$parent])) {
           throw new \InvalidArgumentException("Schema '{$schema->name}' depends_on unknown schema '{$parent}'");
         }

@@ -183,6 +183,23 @@ interface AdapterInterface
   public function batchInsert(string $table, array $columns, array $rows): int;
 
   /**
+   * Move a table's ID generators (sequences) past the IDs already in it.
+   * Needed where inserting explicit IDs does not advance the generator (PostgreSQL).
+   *
+   * @param string $table Table name
+   */
+  public function syncSequences(string $table): void;
+
+  /**
+   * Make the table's ID generator hand out values of at least $next from now on,
+   * so an app writing during a migration cannot take an ID Mygra is about to insert.
+   *
+   * @param string $table Table name
+   * @param int $next Lowest ID the generator may hand out next
+   */
+  public function reserveIds(string $table, int $next): void;
+
+  /**
    * Get the total row count of a table with optional WHERE clause.
    *
    * @param string $table Table name

@@ -137,6 +137,33 @@ schemas:
 
 If a schema fails, every schema that depends on it (directly or further down the chain) is skipped, so children never reference parent rows that didn't arrive. Independent schemas still run. Schemas in a dependency cycle keep their config order and are reported as a warning.
 
+## ID Mapping
+
+Migrating into a table that already has rows (for example, WordPress users into an app with its own users) needs new IDs, and every row pointing at those users must follow them. Otherwise a post silently ends up belonging to whoever already had that ID.
+
+```yaml
+schemas:
+  users:
+    source_table: wp_users
+    target_table: users
+    fields: { ID: id, user_email: email }
+    options:
+      remap_ids: true          # new ID = old ID + an offset, starting after the target's highest ID
+  posts:
+    source_table: wp_posts
+    target_table: posts
+    fields: { ID: id, post_author: author_id }
+    references:
+      author_id: users         # rewritten to the user's new ID; also makes users migrate first
+```
+
+- `migrate` prints each offset (`New IDs: old ID + 40`). Keep it if you need to redirect old URLs.
+- Before loading, Mygra moves the table's auto-increment past its range, so an app that keeps running cannot take those IDs.
+- A reference to a row that does not exist (e.g. a post by a deleted user) is a row error and follows `on_error`. Use `author_id: { schema: users, on_missing: null }` to keep the row with a NULL reference instead.
+- A schema can reference itself (`parent_id: categories`).
+- Offsets are stored in a `mygra_offsets` table in the target. `verify` uses them to check every reference points at the right parent, and a passing `verify` over all schemas removes the table.
+- Needs a single-column integer primary key. IDs inside text (serialized PHP, shortcodes, links) are not rewritten.
+
 ## Commands
 
 - `migrate`: Execute data migration.

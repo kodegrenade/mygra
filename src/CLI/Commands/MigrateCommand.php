@@ -158,6 +158,7 @@ HELP
       $logger
     );
 
+    $executor->setSchemas($config->getAllSchemas());
     $executor->setBatchSize((int) ($input->getOption('batch-size') ?? $config->get('settings.batch_size') ?? 1000));
     $executor->setDryRun((bool) $input->getOption('dry-run'));
     $executor->setOptions([
@@ -242,6 +243,11 @@ HELP
       if ($progressBar) {
         $progressBar->finish();
         $output->writeln('');
+      }
+
+      // Needed later for redirects from old URLs, after verify has removed mygra_offsets
+      if ($result->getMetadata('id_offset') !== null) {
+        $io->text("New IDs: old ID + {$result->getMetadata('id_offset')}");
       }
 
       // Display result; skipped rows are a failure, not a success

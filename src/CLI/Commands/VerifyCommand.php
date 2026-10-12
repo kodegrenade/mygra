@@ -51,10 +51,10 @@ HELP
 
     try {
       $config = ConfigLoader::load($input->getOption('config'));
-      $executor = new MigrationExecutor(
+      $executor = (new MigrationExecutor(
         AdapterFactory::create($config->getSourceConnection()),
         AdapterFactory::create($config->getTargetConnection())
-      );
+      ))->setSchemas($config->getAllSchemas());
     } catch (\Exception $e) {
       $io->error($e->getMessage());
       return Command::FAILURE;
@@ -96,6 +96,12 @@ HELP
     if (!$allMatch) {
       $io->error('Target does not match the source.');
       return Command::FAILURE;
+    }
+
+    // ID offsets are only needed until the data is confirmed; children's checks need their parents',
+    // so remove them only after a full run over every schema
+    if (!$schemaName && $executor->dropOffsets()) {
+      $io->text('Removed mygra_offsets: every schema verified.');
     }
 
     $io->success('Target matches the source.');

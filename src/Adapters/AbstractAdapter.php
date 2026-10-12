@@ -163,6 +163,16 @@ abstract class AbstractAdapter implements AdapterInterface
     return (int) ($result[0]['cnt'] ?? 0);
   }
 
+  public function syncSequences(string $table): void
+  {
+    // MySQL, SQLite and SQL Server advance their counters past explicit IDs on insert
+  }
+
+  public function reserveIds(string $table, int $next): void
+  {
+    // ponytail: no-op for SQLite (rowid = max + 1); add sqlite_sequence handling if a live SQLite target ever matters
+  }
+
   public function getLastInsertId(?string $sequenceName = null): string|false
   {
     return $this->getPdo()->lastInsertId($sequenceName);

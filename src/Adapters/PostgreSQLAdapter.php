@@ -255,6 +255,44 @@ class PostgreSQLAdapter extends AbstractAdapter
   // =========================================================================
 
   /**
+   * Explicit IDs inserted into serial/identity columns leave the sequence behind, so the
+   * app's next insert would reuse ID 1. Move each sequence to MAX(column), never backwards.
+   */
+  public function syncSequences(string $table): void
+  {
+    $this->advanceSequences($table, 0);
+  }
+
+  public function reserveIds(string $table, int $next): void
+  {
+    $this->advanceSequences($table, $next - 1);
+  }
+
+  /**
+   * Set each serial/identity sequence of the table to at least max(MAX(column), $floor).
+   */
+  private function advanceSequences(string $table, int $floor): void
+  {
+    $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $columns = $this->query(
+      "SELECT column_name FROM information_schema.columns
+             WHERE table_schema = ? AND table_name = ?
+             AND (column_default LIKE 'nextval(%' OR is_identity = 'YES')",
+      [$this->schema, $table]
+    );
+
+    foreach (array_column($columns, 'column_name') as $column) {
+      $sequence = $this->query("SELECT pg_get_serial_sequence(?, ?) AS seq", [$qualified, $column])[0]['seq'] ?? null;
+      $max = $this->query("SELECT MAX({$this->quoteIdentifier($column)}) AS max_id FROM {$qualified}")[0]['max_id'] ?? 0;
+      $value = max((int) $max, $floor);
+      if ($sequence === null || $value < 1) {
+        continue;
+      }
+      $this->query("SELECT setval(?, GREATEST(?, (SELECT last_value FROM {$sequence})))", [$sequence, $value]);
+    }
+  }
+
+  /**
    * Batch insert with ON CONFLICT (upsert) support.
    */
   public function batchUpsert(
