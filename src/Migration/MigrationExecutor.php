@@ -141,19 +141,7 @@ class MigrationExecutor
       // Stream rows from source
       foreach ($this->source->streamQuery($query) as $row) {
         // Only transform/validate errors are row-level; insert errors fail the migration
-        $errorMsg = null;
-        try {
-          $transformed = $this->pipeline->process($row, $fieldMap);
-
-          if (!empty($schema->validations)) {
-            $validation = $this->validator->validateRow($transformed, $schema->validations);
-            if (!$validation->isValid()) {
-              $errorMsg = "Validation failed: " . $validation->getFormattedErrors();
-            }
-          }
-        } catch (\Exception $e) {
-          $errorMsg = $e->getMessage();
-        }
+        [$transformed, $errorMsg] = $this->prepareRow($row, $fieldMap, $schema);
 
         if ($errorMsg !== null) {
           $errorCount++;
@@ -225,6 +213,108 @@ class MigrationExecutor
     ));
 
     return $result;
+  }
+
+  /**
+   * Compare source and target after a migration.
+   *
+   * The source side runs through the same query, transforms and validation as execute(),
+   * so "expected" is exactly the rows a migration writes. Both sides are reduced to a row
+   * count and an order-independent checksum of the mapped columns.
+   *
+   * @return array{source_rows: int, invalid_rows: int, expected_rows: int, target_rows: int, checksum_match: bool, match: bool}
+   */
+  public function verify(SchemaConfig $schema): array
+  {
+    $this->configureTransforms($schema);
+    $fieldMap = $schema->fields + $this->joinFieldMap($schema->joins);
+    $columns = array_values($fieldMap);
+
+    $sourceRows = $invalidRows = 0;
+    $sourceSum = 0;
+    foreach ($this->source->streamQuery($this->buildSelectQuery($schema, $schema->where)) as $row) {
+      $sourceRows++;
+      [$transformed, $errorMsg] = $this->prepareRow($row, $fieldMap, $schema);
+      if ($errorMsg !== null) {
+        $invalidRows++;
+        continue;
+      }
+      $sourceSum = $this->addRowHash($sourceSum, $transformed, $columns);
+    }
+
+    $quotedColumns = implode(', ', array_map([$this->target, 'quoteIdentifier'], $columns));
+    $sql = "SELECT {$quotedColumns} FROM {$this->target->quoteIdentifier($schema->targetTable)}";
+    // SQL Server's OFFSET paging requires an ORDER BY
+    $pk = $this->target->getPrimaryKey($schema->targetTable);
+    if ($pk) {
+      $sql .= " ORDER BY " . implode(', ', array_map([$this->target, 'quoteIdentifier'], (array) $pk));
+    }
+
+    $targetRows = 0;
+    $targetSum = 0;
+    foreach ($this->target->streamQuery($sql) as $row) {
+      $targetRows++;
+      $targetSum = $this->addRowHash($targetSum, $row, $columns);
+    }
+
+    $expectedRows = $sourceRows - $invalidRows;
+    $checksumMatch = $sourceSum === $targetSum;
+
+    return [
+      'source_rows' => $sourceRows,
+      'invalid_rows' => $invalidRows,
+      'expected_rows' => $expectedRows,
+      'target_rows' => $targetRows,
+      'checksum_match' => $checksumMatch,
+      'match' => $checksumMatch && $expectedRows === $targetRows,
+    ];
+  }
+
+  /**
+   * Transform and validate one source row.
+   *
+   * @return array{0: ?array, 1: ?string} [transformed row, error message]
+   */
+  private function prepareRow(array $row, array $fieldMap, SchemaConfig $schema): array
+  {
+    try {
+      $transformed = $this->pipeline->process($row, $fieldMap);
+
+      if (!empty($schema->validations)) {
+        $validation = $this->validator->validateRow($transformed, $schema->validations);
+        if (!$validation->isValid()) {
+          return [null, "Validation failed: " . $validation->getFormattedErrors()];
+        }
+      }
+
+      return [$transformed, null];
+    } catch (\Exception $e) {
+      return [null, $e->getMessage()];
+    }
+  }
+
+  /**
+   * Add a row's hash to an order-independent checksum (sum of 60-bit hashes, mod 2^61).
+   */
+  private function addRowHash(int $sum, array $row, array $columns): int
+  {
+    $values = array_map(fn($col) => self::normalizeValue($row[$col] ?? null), $columns);
+    $hash = hexdec(substr(md5(json_encode($values)), 0, 15));
+    return ($sum + $hash) % (1 << 61);
+  }
+
+  /**
+   * Canonical string form, so drivers' formatting differences don't fail verification:
+   * sqlsrv returns numbers as strings, pgsql returns real booleans, DATETIME2 pads ".0000000".
+   */
+  private static function normalizeValue(mixed $value): ?string
+  {
+    return match (true) {
+      $value === null => null,
+      is_bool($value) => $value ? '1' : '0',
+      is_int($value), is_float($value), is_numeric($value) => (string) (0 + $value),
+      default => preg_replace('/^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)\.0*$/', '$1', (string) $value),
+    };
   }
 
   /**

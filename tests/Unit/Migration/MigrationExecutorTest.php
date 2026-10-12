@@ -106,4 +106,21 @@ class MigrationExecutorTest extends TestCase
 
     $this->assertSame('A@X.COM', $this->target->query("SELECT email FROM app_users WHERE id = 1")[0]['email']);
   }
+
+  public function testVerifyMatchesAfterMigrationAndCatchesChangedValues()
+  {
+    $this->executor->execute($this->schema());
+
+    $r = $this->executor->verify($this->schema());
+    $this->assertSame(
+      ['source_rows' => 3, 'invalid_rows' => 1, 'expected_rows' => 2, 'target_rows' => 2, 'checksum_match' => true, 'match' => true],
+      $r
+    );
+
+    // Same row count, different value: only the checksum can catch it
+    $this->target->execute("UPDATE app_users SET email = 'x@x.com' WHERE id = 3");
+    $r = $this->executor->verify($this->schema());
+    $this->assertFalse($r['checksum_match']);
+    $this->assertFalse($r['match']);
+  }
 }

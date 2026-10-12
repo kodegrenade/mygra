@@ -13,6 +13,7 @@ use Mygra\CLI\Commands\ValidateCommand;
 use Mygra\CLI\Commands\InitCommand;
 use Mygra\CLI\Commands\CompareCommand;
 use Mygra\CLI\Commands\SuggestCommand;
+use Mygra\CLI\Commands\VerifyCommand;
 
 /**
  * Mygra CLI Application
@@ -43,6 +44,7 @@ class Application extends SymfonyApplication
       new InitCommand(),
       new CompareCommand(),
       new SuggestCommand(),
+      new VerifyCommand(),
     ]);
   }
 

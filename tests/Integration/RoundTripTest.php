@@ -70,6 +70,10 @@ class RoundTripTest extends TestCase
     $this->assertTrue($resumed->isSuccess(), (string) $resumed->getError());
     $this->assertSame(0, $resumed->getTotalRows());
 
+    // Verify normalizes each driver's value formatting (sqlsrv strings, pgsql booleans, ...)
+    $verify = (new MigrationExecutor($sqlite, $db))->verify(SchemaConfig::fromArray('it', $toDb));
+    $this->assertTrue($verify['match'], json_encode($verify));
+
     // database -> SQLite: read back through the database's streaming path
     $this->migrate($db, $sqlite, [
       'source_table' => 'mygra_it_users',

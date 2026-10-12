@@ -71,6 +71,14 @@ Execute the migration with progress tracking:
 php mygra migrate --schema=users --create
 ```
 
+### 4. Verify
+
+Check the target holds exactly what the migration should have written:
+
+```bash
+php mygra verify --schema=users
+```
+
 ## Configuration
 
 Mygra uses a YAML-based configuration. Example:
@@ -117,6 +125,7 @@ php mygra migrate --schema=users --resume
 ## Commands
 
 - `migrate`: Execute data migration.
+- `verify`: Compare source and target after a migration (row counts and a checksum of the mapped columns). Exits non-zero on mismatch.
 - `inspect`: View database schema details.
 - `compare`: Compare source vs target schemas.
 - `suggest`: Get field mapping suggestions.
