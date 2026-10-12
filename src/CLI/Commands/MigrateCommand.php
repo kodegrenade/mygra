@@ -17,8 +17,6 @@ use Mygra\Adapters\AdapterFactory;
 use Mygra\Migration\MigrationExecutor;
 use Mygra\Transform\TransformPipeline;
 use Mygra\Logger\FileLogger;
-use Mygra\Transaction\RollbackJournal;
-use Mygra\Transaction\TransactionManager;
 
 /**
  * Migrate Command
@@ -67,11 +65,10 @@ class MigrateCommand extends Command
         'Automatically create target table if missing'
       )
       ->addOption(
-        'journal',
-        'j',
-        InputOption::VALUE_OPTIONAL,
-        'Enable rollback journaling',
-        'logs/rollback.journal'
+        'resume',
+        'r',
+        InputOption::VALUE_NONE,
+        'Continue after the highest primary key already in the target'
       )
       ->addOption(
         'no-progress',
@@ -99,6 +96,9 @@ The <info>migrate</info> command executes database migrations.
 
   Dry run (preview only):
     <info>php mygra migrate --schema=users --dry-run</info>
+
+  Continue an interrupted migration:
+    <info>php mygra migrate --schema=users --resume</info>
 
   Custom batch size:
     <info>php mygra migrate --batch-size=5000</info>
@@ -148,20 +148,11 @@ HELP
     $logger = new FileLogger($logFile);
 
     // Create migration executor
-    $journalFile = $input->getOption('journal') ?? $config->get('settings.journal_file');
-    $transactionManager = null;
-
-    if ($journalFile) {
-      $journal = new RollbackJournal($journalFile);
-      $transactionManager = new TransactionManager($targetAdapter, $journal, $logger);
-    }
-
     $executor = new MigrationExecutor(
       $sourceAdapter,
       $targetAdapter,
       TransformPipeline::withDefaults(),
       null,
-      $transactionManager,
       $logger
     );
 
@@ -170,6 +161,8 @@ HELP
     $executor->setOptions([
       'auto_create' => $input->getOption('create'),
       'on_error' => $config->get('settings.on_error', 'skip'),
+      'transaction_mode' => $config->get('settings.transaction_mode', 'per_batch'),
+      'resume' => $input->getOption('resume'),
     ]);
 
     if ($input->getOption('dry-run')) {

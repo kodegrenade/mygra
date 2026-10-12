@@ -11,14 +11,15 @@ use Mygra\Logger\LoggerInterface;
 use Mygra\Logger\NullLogger;
 use Mygra\Schema\SchemaConverter;
 use Mygra\Validation\ValidationRunner;
-use Mygra\Transaction\TransactionManager;
 
 /**
  * Migration Executor
  * 
  * The core engine that executes database migrations.
  * Handles data extraction, transformation, and loading with
- * support for batching, streaming, and transaction management.
+ * support for batching, streaming, resuming, and transaction modes:
+ *   per_batch (default): each batch commits on its own; reruns can resume
+ *   single: the whole schema is one transaction; any failure leaves nothing behind
  */
 class MigrationExecutor
 {
@@ -26,13 +27,10 @@ class MigrationExecutor
   private AdapterInterface $target;
   private TransformPipeline $pipeline;
   private ValidationRunner $validator;
-  private ?TransactionManager $transactionManager = null;
   private LoggerInterface $logger;
 
   private int $batchSize = 1000;
   private bool $dryRun = false;
-  private bool $useTransactions = true;
-  private int $savepointInterval = 10000;
   private array $options = [];
 
   /** @var callable|null */
@@ -42,14 +40,12 @@ class MigrationExecutor
     AdapterInterface $target,
     ?TransformPipeline $pipeline = null,
     ?ValidationRunner $validator = null,
-    ?TransactionManager $transactionManager = null,
     ?LoggerInterface $logger = null
   ) {
     $this->source = $source;
     $this->target = $target;
     $this->pipeline = $pipeline ?? TransformPipeline::withDefaults();
     $this->validator = $validator ?? ValidationRunner::withDefaults();
-    $this->transactionManager = $transactionManager ?? new TransactionManager($this->target, null, $logger);
     $this->logger = $logger ?? new NullLogger();
   }
 
@@ -68,24 +64,6 @@ class MigrationExecutor
   public function setDryRun(bool $dryRun): self
   {
     $this->dryRun = $dryRun;
-    return $this;
-  }
-
-  /**
-   * Enable/disable transaction wrapping.
-   */
-  public function setUseTransactions(bool $use): self
-  {
-    $this->useTransactions = $use;
-    return $this;
-  }
-
-  /**
-   * Set the interval for creating savepoints (in rows).
-   */
-  public function setSavepointInterval(int $interval): self
-  {
-    $this->savepointInterval = $interval;
     return $this;
   }
 
@@ -120,26 +98,36 @@ class MigrationExecutor
     $this->logger->info("Source: {$schema->sourceTable} -> Target: {$schema->targetTable}");
 
     try {
+      $mode = $schema->getOption('transaction_mode', $this->options['transaction_mode'] ?? 'per_batch');
+      if (!in_array($mode, ['per_batch', 'single'], true)) {
+        throw new \InvalidArgumentException("Unknown transaction_mode '{$mode}' (expected per_batch or single)");
+      }
+
       // Ensure target table exists
       if ($this->shouldCreateTarget($schema)) {
         $this->ensureTargetTableExists($schema);
       }
 
+      $where = $schema->where;
+      if ($this->options['resume'] ?? false) {
+        $where = $this->resumeWhere($schema, $where);
+      }
+
       // Build the SELECT query
-      $query = $this->buildSelectQuery($schema);
+      $query = $this->buildSelectQuery($schema, $where);
       $this->logger->debug("Query: {$query}");
 
       // Get total count for progress tracking
-      $totalRows = $this->source->getRowCount($schema->sourceTable, $schema->where);
+      $totalRows = $this->source->getRowCount($schema->sourceTable, $where);
       $this->logger->info("Total rows to migrate: {$totalRows}");
       $result->setTotalRows($totalRows);
 
       // Configure field transformations
       $this->configureTransforms($schema);
 
-      // Begin transaction if enabled
-      if ($this->useTransactions && !$this->dryRun) {
-        $this->transactionManager->begin();
+      // single: one transaction for the schema; flushBatch commits per batch otherwise
+      if ($mode === 'single' && !$this->dryRun) {
+        $this->target->beginTransaction();
       }
 
       $processedCount = 0;
@@ -175,6 +163,7 @@ class MigrationExecutor
           ]);
           $this->logger->warning("Row error: {$errorMsg}");
 
+          // 'rollback' is the legacy name for abort, kept for existing configs
           if ($onError === 'abort' || $onError === 'rollback') {
             throw new \RuntimeException("Migration aborted on row error: {$errorMsg}");
           }
@@ -187,38 +176,24 @@ class MigrationExecutor
         // Flush batch when full
         if (count($batch) >= $this->batchSize) {
           $inserted = $this->flushBatch($schema->targetTable, $batch);
-
-          // Record batch in journal if primary key is available
-          $this->recordBatchInJournal($schema, $batch);
-
           $insertedCount += $inserted;
           $processedCount += count($batch);
           $batch = [];
 
           // Report progress
           $this->reportProgress($processedCount, $totalRows, "Processing...");
-
-          // Create savepoint at intervals
-          if (
-            $this->useTransactions && !$this->dryRun &&
-            $processedCount % $this->savepointInterval === 0
-          ) {
-            $this->transactionManager->checkpoint();
-          }
         }
       }
 
       // Flush remaining batch
       if (!empty($batch)) {
         $inserted = $this->flushBatch($schema->targetTable, $batch);
-        $this->recordBatchInJournal($schema, $batch);
         $insertedCount += $inserted;
         $processedCount += count($batch);
       }
 
-      // Commit transaction
-      if ($this->useTransactions && !$this->dryRun) {
-        $this->transactionManager->commit();
+      if ($this->target->inTransaction()) {
+        $this->target->commit();
       }
 
       $result->setSuccess(true);
@@ -226,9 +201,9 @@ class MigrationExecutor
       $result->setInsertedRows($insertedCount);
       $result->setErrorCount($errorCount);
     } catch (\Exception $e) {
-      // Rollback on error
-      if ($this->useTransactions && !$this->dryRun) {
-        $this->transactionManager->rollback();
+      // single: undo the schema. per_batch: undo the failed batch; committed batches stay (rerun with resume)
+      if ($this->target->inTransaction()) {
+        $this->target->rollback();
       }
 
       $result->setSuccess(false);
@@ -255,7 +230,7 @@ class MigrationExecutor
   /**
    * Build the SELECT query for extracting data.
    */
-  private function buildSelectQuery(SchemaConfig $schema): string
+  private function buildSelectQuery(SchemaConfig $schema, ?string $where): string
   {
     $sourceTable = $schema->sourceTable;
     $fields = array_keys($schema->fields);
@@ -278,8 +253,8 @@ class MigrationExecutor
     $sql = "SELECT {$selectClause} FROM {$sourceTable} {$joinClause}";
 
     // Add WHERE clause
-    if ($schema->where) {
-      $sql .= " WHERE {$schema->where}";
+    if ($where) {
+      $sql .= " WHERE {$where}";
     }
 
     // Deterministic order; SQL Server's OFFSET paging requires it
@@ -382,7 +357,17 @@ class MigrationExecutor
     }
 
     $columns = array_keys($rows[0]);
-    return $this->target->batchInsert($table, $columns, $rows);
+
+    // Inside a single-mode transaction already
+    if ($this->target->inTransaction()) {
+      return $this->target->batchInsert($table, $columns, $rows);
+    }
+
+    // per_batch: the batch commits atomically, so resume never sees half a batch
+    $this->target->beginTransaction();
+    $inserted = $this->target->batchInsert($table, $columns, $rows);
+    $this->target->commit();
+    return $inserted;
   }
 
   /**
@@ -452,71 +437,33 @@ class MigrationExecutor
   }
 
   /**
-   * Record a batch of inserts in the transaction journal.
+   * Restrict the source query to rows after the highest key already in the target.
+   *
+   * The target data is the checkpoint: batches commit atomically, so MAX(pk) is exactly
+   * where the previous run stopped.
    */
-  private function recordBatchInJournal(SchemaConfig $schema, array $batch): void
+  private function resumeWhere(SchemaConfig $schema, ?string $where): ?string
   {
-    if (!$this->transactionManager->getJournal() || empty($batch)) {
-      return;
+    $pk = $this->source->getPrimaryKey($schema->sourceTable);
+    $targetPk = is_string($pk) ? ($schema->fields[$pk] ?? null) : null;
+
+    if ($targetPk === null || isset($schema->transforms[$targetPk])) {
+      throw new \RuntimeException(
+        "Resume needs a single-column source primary key mapped unchanged to the target (schema '{$schema->name}')"
+      );
     }
 
-    // Try to determine primary key from target table
-    $targetSchema = $this->target->getTableSchema($schema->targetTable);
-    $pk = $targetSchema->primaryKey;
+    $last = $this->target->query(
+      "SELECT MAX({$this->target->quoteIdentifier($targetPk)}) AS last_key FROM {$this->target->quoteIdentifier($schema->targetTable)}"
+    )[0]['last_key'] ?? null;
 
-    if (!$pk) {
-      return; // No primary key, can't reliably journal for rollback
+    if ($last === null) {
+      return $where;
     }
 
-    $pkCols = is_array($pk) ? $pk : [$pk];
-    $primaryKeys = [];
+    $this->logger->info("Resuming {$schema->name} after {$pk} = {$last}");
+    $condition = "{$schema->sourceTable}.{$pk} > " . (is_int($last) ? $last : $this->source->quote((string) $last));
 
-    foreach ($batch as $row) {
-      $keyData = [];
-      foreach ($pkCols as $col) {
-        if (!isset($row[$col])) {
-          return; // PK column missing in row, abort journaling for this batch
-        }
-        $keyData[$col] = $row[$col];
-      }
-      $primaryKeys[] = $keyData;
-    }
-
-    $this->transactionManager->recordBatch($schema->targetTable, $primaryKeys);
-  }
-
-  /**
-   * Recover from a failed/interrupted migration using the journal.
-   */
-  public function recovery(): void
-  {
-    if (!$this->transactionManager->needsRecovery()) {
-      $this->logger->info("No recovery needed.");
-      return;
-    }
-
-    $entries = $this->transactionManager->getJournal()->readEntries();
-    $this->logger->info("Starting recovery from journal (" . count($entries) . " entries)...");
-
-    foreach (array_reverse($entries) as $entry) {
-      if ($entry['type'] === 'BATCH_INSERT') {
-        $table = $entry['table'];
-        $keys = $entry['keys'];
-
-        $this->logger->info("Undoing batch insert in table '{$table}' (" . count($keys) . " rows)...");
-
-        foreach ($keys as $keyData) {
-          $conditions = [];
-          foreach (array_keys($keyData) as $col) {
-            $conditions[] = "{$this->target->quoteIdentifier($col)} = ?";
-          }
-          $sql = "DELETE FROM {$this->target->quoteIdentifier($table)} WHERE " . implode(' AND ', $conditions);
-          $this->target->execute($sql, array_values($keyData));
-        }
-      }
-    }
-
-    $this->transactionManager->getJournal()->complete();
-    $this->logger->info("Recovery completed successfully.");
+    return $where ? "({$where}) AND {$condition}" : $condition;
   }
 }

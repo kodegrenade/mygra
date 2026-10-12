@@ -54,14 +54,21 @@ class RoundTripTest extends TestCase
     $sqlite->execute($insert, [2, 'Zoë', 'zoe@x.com', null, 'multi; statement --']);
 
     // SQLite -> database: create target, transform, join
-    $this->migrate($sqlite, $db, [
+    $toDb = [
       'source_table' => 'users',
       'target_table' => 'mygra_it_users',
       'fields' => ['id' => 'id', 'name' => 'name', 'email' => 'email', 'note' => 'note'],
       'transforms' => ['email' => [['transformer' => 'string', 'options' => ['case' => 'lower']]]],
       'joins' => [['table' => 'profiles', 'source_key' => 'pid', 'target_key' => 'id', 'fields' => ['bio' => 'bio']]],
       'options' => ['create_target' => true, 'on_error' => 'abort'],
-    ]);
+    ];
+    $this->migrate($sqlite, $db, $toDb);
+
+    // Resuming a finished migration reads the target's MAX(id) and finds nothing left
+    $resumed = (new MigrationExecutor($sqlite, $db))->setOptions(['resume' => true])
+      ->execute(SchemaConfig::fromArray('it', $toDb));
+    $this->assertTrue($resumed->isSuccess(), (string) $resumed->getError());
+    $this->assertSame(0, $resumed->getTotalRows());
 
     // database -> SQLite: read back through the database's streaming path
     $this->migrate($db, $sqlite, [

@@ -121,7 +121,7 @@ HELP
         'log_level' => 'info',
         'log_file' => 'logs/migration.log',
         'transaction_mode' => 'per_batch',
-        'on_error' => 'rollback',
+        'on_error' => 'abort',
       ],
       'schemas' => [
         $schemaName => [

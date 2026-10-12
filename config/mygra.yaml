@@ -37,8 +37,10 @@ settings:
   batch_size: 1000            # Rows per batch insert
   log_level: info             # debug, info, warning, error
   log_file: logs/migration.log
-  transaction_mode: per_batch # per_batch | per_schema | single
-  on_error: rollback          # rollback | skip | abort
+  # per_batch: each batch commits on its own; rerun with --resume after a failure
+  # single:    one transaction per schema; a failure leaves nothing behind
+  transaction_mode: per_batch # per_batch | single (override per schema under options:)
+  on_error: abort             # abort | skip
 
 # ============================================================================
 # Schema Mappings

@@ -55,15 +55,18 @@ class MigrationExecutorTest extends TestCase
     );
   }
 
-  public function testAbortStopsAndRollsBack()
+  public function testSingleModeAbortRollsBackEverything()
   {
-    $result = $this->executor->execute($this->schema(['options' => ['on_error' => 'abort']]));
+    // Batch size 1: row 1 is flushed before row 2 aborts, and must still be rolled back
+    $result = $this->executor->setBatchSize(1)->execute($this->schema([
+      'options' => ['on_error' => 'abort', 'transaction_mode' => 'single'],
+    ]));
 
     $this->assertFalse($result->isSuccess());
     $this->assertSame(0, $this->target->getRowCount('app_users'));
   }
 
-  public function testInsertFailureFailsMigration()
+  public function testPerBatchFailureKeepsCommittedBatchesAndResumeFinishes()
   {
     $this->target->execute("INSERT INTO app_users (id) VALUES (3)");
 
@@ -71,7 +74,25 @@ class MigrationExecutorTest extends TestCase
     $result = $this->executor->setBatchSize(1)->execute($this->schema());
 
     $this->assertFalse($result->isSuccess());
-    $this->assertSame(1, $this->target->getRowCount('app_users'));
+    $this->assertSame([['id' => 1], ['id' => 3]], $this->target->query("SELECT id FROM app_users ORDER BY id"));
+
+    // Fix the cause, then resume: only rows after id 1 are read, so no duplicate key on id 1
+    $this->target->execute("DELETE FROM app_users WHERE id = 3");
+    $result = $this->executor->setOptions(['resume' => true])->execute($this->schema());
+
+    $this->assertTrue($result->isSuccess(), (string) $result->getError());
+    $this->assertSame(2, $result->getTotalRows());
+    $this->assertSame([['id' => 1], ['id' => 3]], $this->target->query("SELECT id FROM app_users ORDER BY id"));
+  }
+
+  public function testResumeRefusesTransformedPrimaryKey()
+  {
+    $result = $this->executor->setOptions(['resume' => true])->execute($this->schema([
+      'transforms' => ['id' => [['transformer' => 'typecast', 'options' => ['type' => 'int']]]],
+    ]));
+
+    $this->assertFalse($result->isSuccess());
+    $this->assertStringContainsString('Resume needs', (string) $result->getError());
   }
 
   public function testFieldTransformsDoNotLeakBetweenSchemas()

@@ -11,7 +11,6 @@ use Mygra\CLI\Commands\MigrateCommand;
 use Mygra\CLI\Commands\InspectCommand;
 use Mygra\CLI\Commands\ValidateCommand;
 use Mygra\CLI\Commands\InitCommand;
-use Mygra\CLI\Commands\RollbackCommand;
 use Mygra\CLI\Commands\CompareCommand;
 use Mygra\CLI\Commands\SuggestCommand;
 
@@ -42,7 +41,6 @@ class Application extends SymfonyApplication
       new InspectCommand(),
       new ValidateCommand(),
       new InitCommand(),
-      new RollbackCommand(),
       new CompareCommand(),
       new SuggestCommand(),
     ]);
