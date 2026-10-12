@@ -54,6 +54,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install Microsoft ODBC Driver 18 (needed by pdo_sqlsrv)
+      run: |
+        sudo apt-get update
+        if ! sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18; then
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          curl -fsSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+        fi
+
     - name: Setup PHP
       uses: shivammathur/setup-php@v2
       with:

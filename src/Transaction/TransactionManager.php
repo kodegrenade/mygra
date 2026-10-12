@@ -78,7 +78,8 @@ class TransactionManager
     if ($toSavepoint) {
       $this->adapter->rollbackToSavepoint($toSavepoint);
       $this->logger->info("Rolled back to savepoint: {$toSavepoint}");
-    } else {
+    } elseif ($this->adapter->inTransaction()) {
+      // Failures before begin() have nothing to roll back; don't mask the original error
       $this->adapter->rollback();
       $this->logger->info("Full transaction rollback executed");
     }

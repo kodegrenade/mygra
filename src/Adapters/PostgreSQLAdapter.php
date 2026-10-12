@@ -105,7 +105,7 @@ class PostgreSQLAdapter extends AbstractAdapter
     $result = $this->query(
       "SELECT table_name 
              FROM information_schema.tables 
-             WHERE table_schema = $1 
+             WHERE table_schema = ? 
              AND table_type = 'BASE TABLE'
              ORDER BY table_name",
       [$this->schema]
@@ -140,8 +140,8 @@ class PostgreSQLAdapter extends AbstractAdapter
                  FROM information_schema.table_constraints tc
                  JOIN information_schema.key_column_usage kcu 
                      ON tc.constraint_name = kcu.constraint_name
-                 WHERE tc.table_schema = $1
-                 AND tc.table_name = $2
+                 WHERE tc.table_schema = ?
+                 AND tc.table_name = ?
                  AND tc.constraint_type = 'PRIMARY KEY'
              ) pk ON c.column_name = pk.column_name
              LEFT JOIN pg_catalog.pg_statio_all_tables st 
@@ -150,10 +150,10 @@ class PostgreSQLAdapter extends AbstractAdapter
              LEFT JOIN pg_catalog.pg_description pgd 
                  ON pgd.objoid = st.relid 
                  AND pgd.objsubid = c.ordinal_position
-             WHERE c.table_schema = $1 
-             AND c.table_name = $2
+             WHERE c.table_schema = ? 
+             AND c.table_name = ?
              ORDER BY c.ordinal_position",
-      [$this->schema, $table]
+      [$this->schema, $table, $this->schema, $table]
     );
   }
 
@@ -165,8 +165,8 @@ class PostgreSQLAdapter extends AbstractAdapter
              JOIN information_schema.key_column_usage kcu 
                  ON tc.constraint_name = kcu.constraint_name
                  AND tc.table_schema = kcu.table_schema
-             WHERE tc.table_schema = $1
-             AND tc.table_name = $2
+             WHERE tc.table_schema = ?
+             AND tc.table_name = ?
              AND tc.constraint_type = 'PRIMARY KEY'
              ORDER BY kcu.ordinal_position",
       [$this->schema, $table]
@@ -195,8 +195,8 @@ class PostgreSQLAdapter extends AbstractAdapter
              JOIN information_schema.constraint_column_usage ccu
                  ON ccu.constraint_name = tc.constraint_name
                  AND ccu.table_schema = tc.table_schema
-             WHERE tc.table_schema = $1
-             AND tc.table_name = $2
+             WHERE tc.table_schema = ?
+             AND tc.table_name = ?
              AND tc.constraint_type = 'FOREIGN KEY'",
       [$this->schema, $table]
     );
@@ -227,8 +227,8 @@ class PostgreSQLAdapter extends AbstractAdapter
              JOIN pg_class i ON i.oid = ix.indexrelid
              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
              JOIN pg_namespace n ON n.oid = t.relnamespace
-             WHERE n.nspname = $1
-             AND t.relname = $2
+             WHERE n.nspname = ?
+             AND t.relname = ?
              ORDER BY i.relname, a.attnum",
       [$this->schema, $table]
     );
@@ -315,7 +315,7 @@ class PostgreSQLAdapter extends AbstractAdapter
 
   public function getPlaceholderStyle(): string
   {
-    return 'numbered'; // PostgreSQL uses $1, $2, etc.
+    return 'positional'; // PDO binds ? and rewrites it to $n itself; raw $n placeholders silently match nothing
   }
 
   /**
