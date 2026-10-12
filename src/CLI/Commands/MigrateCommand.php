@@ -15,6 +15,7 @@ use Symfony\Component\Console\Attribute\AsCommand;
 use Mygra\Config\ConfigLoader;
 use Mygra\Adapters\AdapterFactory;
 use Mygra\Migration\MigrationExecutor;
+use Mygra\Migration\SchemaOrder;
 use Mygra\Transform\TransformPipeline;
 use Mygra\Logger\FileLogger;
 
@@ -182,6 +183,21 @@ HELP
           : "No schemas defined in configuration"
       );
       return Command::FAILURE;
+    }
+
+    // Parents before children (foreign keys and options.depends_on)
+    if (!$schemaName) {
+      try {
+        [$schemas, $cyclic] = SchemaOrder::sort($schemas, $sourceAdapter);
+      } catch (\InvalidArgumentException $e) {
+        $io->error($e->getMessage());
+        return Command::FAILURE;
+      }
+
+      $io->text('Order: ' . implode(' → ', array_map(fn($s) => $s->name, $schemas)));
+      if ($cyclic) {
+        $io->warning('Dependency cycle, kept in config order: ' . implode(', ', $cyclic));
+      }
     }
 
     // Execute migrations

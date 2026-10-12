@@ -10,6 +10,7 @@ use Mygra\Adapters\AdapterFactory;
 use Mygra\Adapters\AdapterInterface;
 use Mygra\Config\SchemaConfig;
 use Mygra\Migration\MigrationExecutor;
+use Mygra\Migration\SchemaOrder;
 
 /**
  * SQLite -> real database -> SQLite round trip.
@@ -84,6 +85,27 @@ class RoundTripTest extends TestCase
 
     // Loose compare: some drivers (sqlsrv) return numbers as strings
     $this->assertEquals(self::EXPECTED, $sqlite->query("SELECT id, name, email, bio, note FROM back ORDER BY id"));
+  }
+
+  #[DataProvider('databases')]
+  public function testForeignKeysOrderSchemas(string $envVar)
+  {
+    $config = json_decode((string) getenv($envVar), true);
+    if (!$config) {
+      $this->markTestSkipped("{$envVar} not set");
+    }
+
+    $db = AdapterFactory::create($config);
+    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_posts'));
+    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_authors'));
+    $db->execute("CREATE TABLE mygra_it_authors (id INT PRIMARY KEY)");
+    // Table-level FOREIGN KEY: MySQL silently ignores inline column REFERENCES
+    $db->execute("CREATE TABLE mygra_it_posts (id INT PRIMARY KEY, author_id INT, FOREIGN KEY (author_id) REFERENCES mygra_it_authors(id))");
+
+    $schema = fn($table) => SchemaConfig::fromArray($table, ['source_table' => $table, 'target_table' => $table]);
+    [$ordered] = SchemaOrder::sort([$schema('mygra_it_posts'), $schema('mygra_it_authors')], $db);
+
+    $this->assertSame(['mygra_it_authors', 'mygra_it_posts'], array_map(fn($s) => $s->name, $ordered));
   }
 
   private function migrate(AdapterInterface $source, AdapterInterface $target, array $schema): void

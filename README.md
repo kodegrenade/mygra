@@ -122,6 +122,21 @@ Set `settings.transaction_mode` (or per schema under `options:`):
 php mygra migrate --schema=users --resume
 ```
 
+## Migration Order
+
+When migrating all schemas, Mygra runs parents before children: a schema waits for any schema whose source table its source table references by foreign key. Sources without declared foreign keys (e.g. MyISAM, WordPress) can state dependencies explicitly:
+
+```yaml
+schemas:
+  posts:
+    source_table: wp_posts
+    target_table: posts
+    options:
+      depends_on: [users]
+```
+
+Schemas in a dependency cycle keep their config order and are reported as a warning.
+
 ## Commands
 
 - `migrate`: Execute data migration.
