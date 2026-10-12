@@ -19,6 +19,19 @@
 - Write tests for new features.
 - Run tests before submitting a pull request.
 
+```bash
+composer test               # unit tests (SQLite only)
+composer test:integration   # round trip against real databases
+```
+
+Integration tests run against each database whose `MYGRA_TEST_*` env var is set to its connection config as JSON; the rest are skipped. CI sets all three (see `.github/workflows/php.yml`). Example:
+
+```bash
+MYGRA_TEST_MYSQL='{"driver":"mysql","host":"127.0.0.1","database":"mygra_it","user":"root"}' composer test:integration
+```
+
+Others: `MYGRA_TEST_PGSQL`, `MYGRA_TEST_SQLSRV`.
+
 ## License
 
 By contributing to this project, you agree to license your contribution under the MIT license.

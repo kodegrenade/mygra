@@ -282,6 +282,12 @@ class MigrationExecutor
       $sql .= " WHERE {$schema->where}";
     }
 
+    // Deterministic order; SQL Server's OFFSET paging requires it
+    $pk = $this->source->getPrimaryKey($sourceTable);
+    if ($pk) {
+      $sql .= " ORDER BY " . implode(', ', array_map(fn($col) => "{$sourceTable}.{$col}", (array) $pk));
+    }
+
     return $sql;
   }
 
@@ -332,6 +338,18 @@ class MigrationExecutor
     foreach ($schema->transforms as $field => $transforms) {
       $this->pipeline->forField($field, $transforms);
     }
+  }
+
+  /**
+   * All table names referenced by (nested) joins.
+   */
+  private function joinTables(array $joins): array
+  {
+    $tables = [];
+    foreach ($joins as $join) {
+      $tables = [...$tables, $join['table'], ...$this->joinTables($join['join'])];
+    }
+    return array_unique($tables);
   }
 
   /**
@@ -407,7 +425,11 @@ class MigrationExecutor
 
     // Convert to target schema
     $converter = new SchemaConverter();
-    $targetTableSchema = $converter->convert($sourceTableSchema, $schema);
+    $joinSchemas = [];
+    foreach ($this->joinTables($schema->joins) as $table) {
+      $joinSchemas[$table] = $this->source->getTableSchema($table);
+    }
+    $targetTableSchema = $converter->convert($sourceTableSchema, $schema, $joinSchemas);
 
     // Generate SQL
     $driver = $this->target->getPdo()->getAttribute(\PDO::ATTR_DRIVER_NAME);

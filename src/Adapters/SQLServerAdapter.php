@@ -37,6 +37,10 @@ class SQLServerAdapter extends AbstractAdapter
     if ($driver === 'sqlsrv') {
       // Native Windows driver
       $dsn = "sqlsrv:Server={$host},{$port};Database={$database}";
+      // ODBC Driver 18 encrypts by default and rejects self-signed certificates
+      if (!empty($config['trust_server_certificate'])) {
+        $dsn .= ";TrustServerCertificate=1";
+      }
     } else {
       // FreeTDS/dblib for Linux/Mac
       $dsn = "dblib:host={$host}:{$port};dbname={$database}";
@@ -262,24 +266,38 @@ class SQLServerAdapter extends AbstractAdapter
     $maxBatchSize = max(1, min(1000, intdiv(2100, count($columns))));
     $totalInserted = 0;
 
-    foreach (array_chunk($rows, $maxBatchSize) as $batch) {
-      $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-      $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-      $columnList = implode(', ', $quotedColumns);
+    // Explicit values for an IDENTITY column need IDENTITY_INSERT
+    $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $identity = $this->query(
+      "SELECT name FROM sys.identity_columns WHERE object_id = OBJECT_ID(?)",
+      [$qualified]
+    );
+    $identityInsert = !empty($identity) && in_array($identity[0]['name'], $columns, true);
+    if ($identityInsert) {
+      $this->execute("SET IDENTITY_INSERT {$qualified} ON");
+    }
 
-      $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-      $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
+    $columnList = implode(', ', array_map([$this, 'quoteIdentifier'], $columns));
+    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
 
-      $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
+    try {
+      foreach (array_chunk($rows, $maxBatchSize) as $batch) {
+        $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
+        $sql = "INSERT INTO {$qualified} ({$columnList}) VALUES {$placeholders}";
 
-      $values = [];
-      foreach ($batch as $row) {
-        foreach ($columns as $col) {
-          $values[] = $row[$col] ?? null;
+        $values = [];
+        foreach ($batch as $row) {
+          foreach ($columns as $col) {
+            $values[] = $row[$col] ?? null;
+          }
         }
-      }
 
-      $totalInserted += $this->execute($sql, $values);
+        $totalInserted += $this->execute($sql, $values);
+      }
+    } finally {
+      if ($identityInsert) {
+        $this->execute("SET IDENTITY_INSERT {$qualified} OFF");
+      }
     }
 
     return $totalInserted;

@@ -41,6 +41,7 @@
   ],
   "scripts": {
     "test": "./vendor/bin/phpunit tests/Unit",
+    "test:integration": "./vendor/bin/phpunit tests/Integration",
     "migrate": "php mygra migrate"
   },
   "config": {
