@@ -49,4 +49,24 @@ class TransformPipelineTest extends TestCase
     $this->assertEquals('2023-10-27', $transformer->transform('2023-10-27 15:30:00', $options));
     $this->assertEquals('2023-01-01', $transformer->transform(1672531200, $options));
   }
+
+  public function testColumnsNamedLikeOptionsDoNotBecomeOptions()
+  {
+    $pipeline = TransformPipeline::withDefaults();
+    $pipeline->forField('name', ['string']);
+    $pipeline->forField('qty', [['typecast' => ['type' => 'int']]]);
+
+    $row = ['name' => 'ada', 'prefix' => 'DR. ', 'qty' => '7', 'type' => 'bool'];
+    $result = $pipeline->process($row, ['name' => 'name', 'qty' => 'qty']);
+
+    $this->assertSame(['name' => 'ada', 'qty' => 7], $result);
+  }
+
+  public function testStringOptionsApplyAlongsideListedOperations()
+  {
+    $pipeline = TransformPipeline::withDefaults();
+    $pipeline->forField('username', [['string' => ['operations' => ['trim'], 'case' => 'lower', 'max_length' => 3]]]);
+
+    $this->assertSame(['username' => 'ada'], $pipeline->process(['u' => '  ADALOVELACE '], ['u' => 'username']));
+  }
 }

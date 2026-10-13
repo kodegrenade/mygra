@@ -96,7 +96,8 @@ class TransformPipeline
         $value = $this->applyTransformers(
           $value,
           $this->fieldTransformers[$targetField],
-          array_merge($row, ['_source_field' => $sourceField, '_target_field' => $targetField])
+          // The row goes under its own key: merged in, a column named like an option (type, prefix, ...) became that option
+          ['_row' => $row, '_source_field' => $sourceField, '_target_field' => $targetField]
         );
       }
 

@@ -156,7 +156,7 @@ HELP
       ?? $config->get('settings.log_file')
       ?? 'logs/migration_{date}.log';
 
-    $logger = new FileLogger($logFile);
+    $logger = new FileLogger($logFile, $config->get('settings.log_level', 'info'));
 
     // Create migration executor
     $executor = new MigrationExecutor(

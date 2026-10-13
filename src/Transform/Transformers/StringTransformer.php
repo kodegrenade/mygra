@@ -37,7 +37,8 @@ class StringTransformer implements TransformerInterface
     $value = (string) $value;
 
     // Apply operations in order
-    $operations = $context['operations'] ?? $this->getDefaultOperations($context);
+    // `operations` sets the order; options such as case or max_length still apply when not listed
+    $operations = array_values(array_unique([...($context['operations'] ?? []), ...$this->getDefaultOperations($context)]));
 
     foreach ($operations as $operation) {
       $value = $this->applyOperation($value, $operation, $context);
