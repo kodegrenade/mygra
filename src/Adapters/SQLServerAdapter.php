@@ -264,13 +264,41 @@ class SQLServerAdapter extends AbstractAdapter
 
   public function batchInsert(string $table, array $columns, array $rows): int
   {
-    if (empty($rows)) {
-      return 0;
-    }
+    return $this->withIdentityInsert($table, $columns, fn($qualified) => $this->writeRows($qualified, $columns, $rows, ''));
+  }
 
-    $totalInserted = 0;
+  /**
+   * Batched MERGE: rows are matched on the key columns, updated if found, inserted otherwise.
+   */
+  public function batchUpsert(string $table, array $columns, array $rows, array $keyColumns): int
+  {
+    $q = [$this, 'quoteIdentifier'];
+    $columnList = implode(', ', array_map($q, $columns));
+    $on = implode(' AND ', array_map(fn($k) => "target.{$q($k)} = source.{$q($k)}", $keyColumns));
+    $updates = array_map(fn($c) => "target.{$q($c)} = source.{$q($c)}", array_diff($columns, $keyColumns));
+    $matched = $updates ? ' WHEN MATCHED THEN UPDATE SET ' . implode(', ', $updates) : '';
+    $insertValues = implode(', ', array_map(fn($c) => "source.{$q($c)}", $columns));
+    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
 
-    // Explicit values for an IDENTITY column need IDENTITY_INSERT
+    return $this->withIdentityInsert($table, $columns, function (string $qualified) use ($rows, $columns, $columnList, $on, $matched, $insertValues, $placeholderRow): int {
+      $total = 0;
+      foreach (array_chunk($rows, $this->insertChunkSize(count($columns))) as $chunk) {
+        $placeholders = implode(', ', array_fill(0, count($chunk), $placeholderRow));
+        $sql = "MERGE {$qualified} WITH (HOLDLOCK) AS target USING (VALUES {$placeholders}) AS source ({$columnList})"
+          . " ON {$on}{$matched} WHEN NOT MATCHED THEN INSERT ({$columnList}) VALUES ({$insertValues});";
+        $total += $this->execute($sql, $this->rowValues($chunk, $columns));
+      }
+      return $total;
+    });
+  }
+
+  /**
+   * Run a write with IDENTITY_INSERT on when explicit values go into the table's IDENTITY column.
+   *
+   * @param callable(string $qualifiedTable): int $write
+   */
+  private function withIdentityInsert(string $table, array $columns, callable $write): int
+  {
     $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
     $identity = $this->query(
       "SELECT name FROM sys.identity_columns WHERE object_id = OBJECT_ID(?)",
@@ -281,88 +309,13 @@ class SQLServerAdapter extends AbstractAdapter
       $this->enableIdentityInsert($table);
     }
 
-    $columnList = implode(', ', array_map([$this, 'quoteIdentifier'], $columns));
-    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-
     try {
-      foreach (array_chunk($rows, $this->insertChunkSize(count($columns))) as $batch) {
-        $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
-        $sql = "INSERT INTO {$qualified} ({$columnList}) VALUES {$placeholders}";
-
-        $values = [];
-        foreach ($batch as $row) {
-          foreach ($columns as $col) {
-            $values[] = $row[$col] ?? null;
-          }
-        }
-
-        $totalInserted += $this->execute($sql, $values);
-      }
+      return $write($qualified);
     } finally {
       if ($identityInsert) {
         $this->disableIdentityInsert($table);
       }
     }
-
-    return $totalInserted;
-  }
-
-  /**
-   * Batch insert with MERGE (upsert) support.
-   */
-  public function batchUpsert(
-    string $table,
-    array $columns,
-    array $rows,
-    array $keyColumns,
-    array $updateColumns = []
-  ): int {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-
-    $totalAffected = 0;
-
-    foreach ($rows as $row) {
-      // Build MERGE statement for each row
-      $matchConditions = [];
-      foreach ($keyColumns as $col) {
-        $matchConditions[] = "target." . $this->quoteIdentifier($col) . " = source." . $this->quoteIdentifier($col);
-      }
-
-      $sourceValues = [];
-      $sourceColumns = [];
-      $paramIndex = 0;
-      foreach ($columns as $col) {
-        $sourceColumns[] = "? as " . $this->quoteIdentifier($col);
-        $sourceValues[] = $row[$col] ?? null;
-      }
-
-      $insertColumns = implode(', ', $quotedColumns);
-      $insertValues = 'source.' . implode(', source.', $quotedColumns);
-
-      $sql = "MERGE {$quotedTable} AS target
-                    USING (SELECT " . implode(', ', $sourceColumns) . ") AS source
-                    ON " . implode(' AND ', $matchConditions) . "
-                    WHEN MATCHED THEN UPDATE SET ";
-
-      $updates = [];
-      $updateCols = empty($updateColumns) ? array_diff($columns, $keyColumns) : $updateColumns;
-      foreach ($updateCols as $col) {
-        $quoted = $this->quoteIdentifier($col);
-        $updates[] = "target.{$quoted} = source.{$quoted}";
-      }
-      $sql .= implode(', ', $updates);
-
-      $sql .= " WHEN NOT MATCHED THEN INSERT ({$insertColumns}) VALUES ({$insertValues});";
-
-      $totalAffected += $this->execute($sql, $sourceValues);
-    }
-
-    return $totalAffected;
   }
 
   // =========================================================================

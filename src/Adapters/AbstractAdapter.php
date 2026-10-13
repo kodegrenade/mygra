@@ -133,33 +133,58 @@ abstract class AbstractAdapter implements AdapterInterface
 
   public function batchInsert(string $table, array $columns, array $rows): int
   {
-    if (empty($rows)) {
+    return $this->writeRows($this->quoteIdentifier($table), $columns, $rows, '');
+  }
+
+  public function batchUpsert(string $table, array $columns, array $rows, array $keyColumns): int
+  {
+    return $this->writeRows($this->quoteIdentifier($table), $columns, $rows, $this->upsertClause($columns, $keyColumns));
+  }
+
+  /**
+   * INSERT ... VALUES in chunks that stay under the driver's parameter limit, plus an optional trailing clause.
+   */
+  protected function writeRows(string $quotedTable, array $columns, array $rows, string $suffix): int
+  {
+    if (!$rows) {
       return 0;
     }
 
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
+    $columnList = implode(', ', array_map([$this, 'quoteIdentifier'], $columns));
     $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
 
-    $totalInserted = 0;
-
+    $total = 0;
     foreach (array_chunk($rows, $this->insertChunkSize(count($columns))) as $chunk) {
       $placeholders = implode(', ', array_fill(0, count($chunk), $placeholderRow));
-      $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-      // Flatten the rows array for binding
-      $values = [];
-      foreach ($chunk as $row) {
-        foreach ($columns as $col) {
-          $values[] = $row[$col] ?? null;
-        }
-      }
-
-      $totalInserted += $this->execute($sql, $values);
+      $total += $this->execute("INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}{$suffix}", $this->rowValues($chunk, $columns));
     }
+    return $total;
+  }
 
-    return $totalInserted;
+  /**
+   * ON CONFLICT upsert (PostgreSQL, SQLite 3.24+): update every non-key column in place.
+   * SQLite's INSERT OR REPLACE is avoided on purpose: it deletes the row, firing ON DELETE CASCADE.
+   */
+  protected function upsertClause(array $columns, array $keyColumns): string
+  {
+    $q = [$this, 'quoteIdentifier'];
+    $updates = array_map(fn($c) => "{$q($c)} = EXCLUDED.{$q($c)}", array_diff($columns, $keyColumns));
+    return " ON CONFLICT (" . implode(', ', array_map($q, $keyColumns)) . ") "
+      . ($updates ? 'DO UPDATE SET ' . implode(', ', $updates) : 'DO NOTHING');
+  }
+
+  /**
+   * Row values flattened in column order, for binding.
+   */
+  protected function rowValues(array $rows, array $columns): array
+  {
+    $values = [];
+    foreach ($rows as $row) {
+      foreach ($columns as $col) {
+        $values[] = $row[$col] ?? null;
+      }
+    }
+    return $values;
   }
 
   /**

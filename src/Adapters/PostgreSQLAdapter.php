@@ -292,54 +292,6 @@ class PostgreSQLAdapter extends AbstractAdapter
     }
   }
 
-  /**
-   * Batch insert with ON CONFLICT (upsert) support.
-   */
-  public function batchUpsert(
-    string $table,
-    array $columns,
-    array $rows,
-    array $conflictColumns,
-    array $updateColumns = []
-  ): int {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    // PDO binds ? / :name only, not $1-style placeholders
-    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-    $rowPlaceholders = array_fill(0, count($rows), $placeholderRow);
-    $values = [];
-
-    foreach ($rows as $row) {
-      foreach ($columns as $col) {
-        $values[] = $row[$col] ?? null;
-      }
-    }
-
-    $conflictList = implode(', ', array_map([$this, 'quoteIdentifier'], $conflictColumns));
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES " . implode(', ', $rowPlaceholders);
-    $sql .= " ON CONFLICT ({$conflictList})";
-
-    if (!empty($updateColumns)) {
-      $updates = [];
-      foreach ($updateColumns as $col) {
-        $quoted = $this->quoteIdentifier($col);
-        $updates[] = "{$quoted} = EXCLUDED.{$quoted}";
-      }
-      $sql .= " DO UPDATE SET " . implode(', ', $updates);
-    } else {
-      $sql .= " DO NOTHING";
-    }
-
-    return $this->execute($sql, $values);
-  }
-
   // =========================================================================
   // Utility Methods
   // =========================================================================

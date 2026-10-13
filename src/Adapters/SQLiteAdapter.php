@@ -163,45 +163,6 @@ class SQLiteAdapter extends AbstractAdapter
   }
 
   // =========================================================================
-  // Batch Operations
-  // =========================================================================
-
-  /**
-   * Batch insert with INSERT OR REPLACE (upsert) support.
-   */
-  public function batchUpsert(string $table, array $columns, array $rows): int
-  {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $maxBatchSize = 500;
-    $totalInserted = 0;
-
-    foreach (array_chunk($rows, $maxBatchSize) as $batch) {
-      $quotedTable = $this->quoteIdentifier($table);
-      $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-      $columnList = implode(', ', $quotedColumns);
-
-      $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-      $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
-
-      $sql = "INSERT OR REPLACE INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-      $values = [];
-      foreach ($batch as $row) {
-        foreach ($columns as $col) {
-          $values[] = $row[$col] ?? null;
-        }
-      }
-
-      $totalInserted += $this->execute($sql, $values);
-    }
-
-    return $totalInserted;
-  }
-
-  // =========================================================================
   // Utility Methods
   // =========================================================================
 

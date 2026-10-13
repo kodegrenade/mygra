@@ -123,4 +123,26 @@ class MigrationExecutorTest extends TestCase
     $this->assertFalse($r['checksum_match']);
     $this->assertFalse($r['match']);
   }
+
+  public function testUpsertUpdatesChangedRowsAddsNewOnesAndKeepsChildren()
+  {
+    $this->executor->execute($this->schema());
+
+    // A child row in the target that ON DELETE CASCADE would wipe if upsert deleted and re-inserted
+    $this->target->execute("CREATE TABLE notes (user_id INT REFERENCES app_users(id) ON DELETE CASCADE)");
+    $this->target->execute("INSERT INTO notes VALUES (1)");
+
+    // The old app kept running: one user changed, one signed up
+    $this->source->execute("UPDATE users SET email = 'NEW@X.COM' WHERE id = 1");
+    $this->source->execute("INSERT INTO users VALUES (4, 'D@X.COM', 1)");
+
+    $result = $this->executor->setOptions(['upsert' => true])->execute($this->schema());
+
+    $this->assertTrue($result->isSuccess(), (string) $result->getError());
+    $this->assertSame(
+      [['id' => 1, 'email' => 'NEW@X.COM'], ['id' => 3, 'email' => 'C@X.COM'], ['id' => 4, 'email' => 'D@X.COM']],
+      $this->target->query("SELECT id, email FROM app_users ORDER BY id")
+    );
+    $this->assertSame(1, $this->target->getRowCount('notes'));
+  }
 }

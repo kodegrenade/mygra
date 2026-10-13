@@ -206,6 +206,78 @@ class RoundTripTest extends TestCase
     $executor->dropOffsets();
   }
 
+  #[DataProvider('databases')]
+  public function testUpsertFinalSync(string $envVar)
+  {
+    $db = $this->autoIdTable($envVar, 'mygra_it_up');
+    $table = $db->quoteIdentifier('mygra_it_up');
+
+    $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
+    $sqlite->execute("CREATE TABLE src (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute("INSERT INTO src VALUES (1, 'a'), (2, 'b')");
+    $schema = ['source_table' => 'src', 'target_table' => 'mygra_it_up', 'fields' => ['id' => 'id', 'name' => 'name']];
+    $this->migrate($sqlite, $db, $schema);
+
+    $sqlite->execute("UPDATE src SET name = 'a2' WHERE id = 1");
+    $sqlite->execute("INSERT INTO src VALUES (3, 'c')");
+    $result = (new MigrationExecutor($sqlite, $db))->setOptions(['upsert' => true])->execute(SchemaConfig::fromArray('it', $schema));
+
+    $this->assertTrue($result->isSuccess(), (string) $result->getError());
+    $this->assertSame(3, $result->getInsertedRows());
+    $this->assertEquals(
+      [['id' => 1, 'name' => 'a2'], ['id' => 2, 'name' => 'b'], ['id' => 3, 'name' => 'c']],
+      $db->query("SELECT id, name FROM {$table} ORDER BY id")
+    );
+
+    // Only key columns: existing rows are left alone, new ones inserted
+    $db->batchUpsert('mygra_it_up', ['id'], [['id' => 1], ['id' => 9]], ['id']);
+    $this->assertSame(4, $db->getRowCount('mygra_it_up'));
+  }
+
+  #[DataProvider('databases')]
+  public function testUuidKeysWithCreatedTables(string $envVar)
+  {
+    $config = json_decode((string) getenv($envVar), true);
+    if (!$config) {
+      $this->markTestSkipped("{$envVar} not set");
+    }
+    $db = AdapterFactory::create($config);
+    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_uposts'));
+    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_uusers'));
+
+    $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
+    $sqlite->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute("INSERT INTO users VALUES (1, 'ada'), (2, 'bo')");
+    $sqlite->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT)");
+    $sqlite->execute("INSERT INTO posts VALUES (10, 2), (11, 1)");
+
+    $schemas = [
+      'users' => SchemaConfig::fromArray('users', [
+        'source_table' => 'users', 'target_table' => 'mygra_it_uusers',
+        'fields' => ['id' => 'id', 'name' => 'name'], 'options' => ['remap_ids' => 'uuid', 'create_target' => true],
+      ]),
+      'posts' => SchemaConfig::fromArray('posts', [
+        'source_table' => 'posts', 'target_table' => 'mygra_it_uposts',
+        'fields' => ['id' => 'id', 'author_id' => 'author_id'], 'references' => ['author_id' => 'users'],
+        'options' => ['remap_ids' => 'uuid', 'create_target' => true],
+      ]),
+    ];
+    $executor = (new MigrationExecutor($sqlite, $db))->setSchemas($schemas);
+    foreach ($schemas as $schema) {
+      $result = $executor->execute($schema);
+      $this->assertTrue($result->isSuccess(), (string) $result->getError());
+      $this->assertSame(0, $result->getErrorCount(), json_encode($result->getErrors()));
+    }
+
+    $this->assertEquals(
+      [['name' => 'bo'], ['name' => 'ada']],
+      $db->query("SELECT u.name FROM {$db->quoteIdentifier('mygra_it_uposts')} p JOIN {$db->quoteIdentifier('mygra_it_uusers')} u ON u.id = p.author_id ORDER BY u.name DESC")
+    );
+    foreach ($schemas as $schema) {
+      $this->assertTrue($executor->verify($schema)['match'], $schema->name);
+    }
+  }
+
   /**
    * Connect to the database under test and (re)create a table with a generated integer ID.
    */

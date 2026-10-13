@@ -55,6 +55,15 @@ class MySQLAdapter extends AbstractAdapter
     $this->pdo->exec("SET sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'");
   }
 
+  protected function upsertClause(array $columns, array $keyColumns): string
+  {
+    // VALUES() is deprecated in MySQL 8.0.20+ but still works, and is the only form MariaDB accepts.
+    // With no non-key columns, "key = VALUES(key)" makes an existing row a no-op instead of an error.
+    $q = [$this, 'quoteIdentifier'];
+    $updates = array_diff($columns, $keyColumns) ?: $keyColumns;
+    return ' ON DUPLICATE KEY UPDATE ' . implode(', ', array_map(fn($c) => "{$q($c)} = VALUES({$q($c)})", $updates));
+  }
+
   public function reserveIds(string $table, int $next): void
   {
     // InnoDB never sets the counter below MAX(id) + 1, so this cannot move it backwards past used IDs
@@ -229,48 +238,6 @@ class MySQLAdapter extends AbstractAdapter
     }
 
     return array_values($indexes);
-  }
-
-  // =========================================================================
-  // Batch Operations (Optimized for MySQL)
-  // =========================================================================
-
-  /**
-   * Batch insert with ON DUPLICATE KEY UPDATE support.
-   */
-  public function batchUpsert(string $table, array $columns, array $rows, array $updateColumns = []): int
-  {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-    $placeholders = implode(', ', array_fill(0, count($rows), $placeholderRow));
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-    // Add ON DUPLICATE KEY UPDATE clause
-    if (!empty($updateColumns)) {
-      $updates = [];
-      foreach ($updateColumns as $col) {
-        $quoted = $this->quoteIdentifier($col);
-        $updates[] = "{$quoted} = VALUES({$quoted})";
-      }
-      $sql .= " ON DUPLICATE KEY UPDATE " . implode(', ', $updates);
-    }
-
-    $values = [];
-    foreach ($rows as $row) {
-      foreach ($columns as $col) {
-        $values[] = $row[$col] ?? null;
-      }
-    }
-
-    return $this->execute($sql, $values);
   }
 
   // =========================================================================

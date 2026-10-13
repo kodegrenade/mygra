@@ -67,6 +67,12 @@ class MigrateCommand extends Command
         'Automatically create target table if missing'
       )
       ->addOption(
+        'upsert',
+        'u',
+        InputOption::VALUE_NONE,
+        'Update rows that already exist in the target instead of failing (final sync before cutover)'
+      )
+      ->addOption(
         'resume',
         'r',
         InputOption::VALUE_NONE,
@@ -98,6 +104,9 @@ The <info>migrate</info> command executes database migrations.
 
   Dry run (preview only):
     <info>php mygra migrate --schema=users --dry-run</info>
+
+  Final sync before cutover (update changed rows, add new ones):
+    <info>php mygra migrate --upsert</info>
 
   Continue an interrupted migration:
     <info>php mygra migrate --schema=users --resume</info>
@@ -166,6 +175,7 @@ HELP
       'on_error' => $config->get('settings.on_error', 'skip'),
       'transaction_mode' => $config->get('settings.transaction_mode', 'per_batch'),
       'resume' => $input->getOption('resume'),
+      'upsert' => $input->getOption('upsert'),
     ]);
 
     if ($input->getOption('dry-run')) {
@@ -248,6 +258,9 @@ HELP
       // Needed later for redirects from old URLs, after verify has removed mygra_offsets
       if ($result->getMetadata('id_offset') !== null) {
         $io->text("New IDs: old ID + {$result->getMetadata('id_offset')}");
+      }
+      if ($result->getMetadata('id_uuid') !== null) {
+        $io->text("New IDs: {$result->getMetadata('id_uuid')}");
       }
 
       foreach ($result->getWarnings() as $warning) {

@@ -183,6 +183,17 @@ interface AdapterInterface
   public function batchInsert(string $table, array $columns, array $rows): int;
 
   /**
+   * Insert rows, or update every non-key column of rows whose key already exists.
+   *
+   * @param string $table Table name
+   * @param array $columns Column names
+   * @param array $rows Array of row data
+   * @param array $keyColumns Columns that identify a row (the primary key)
+   * @return int Rows affected, as the driver counts them (MySQL counts an update as 2)
+   */
+  public function batchUpsert(string $table, array $columns, array $rows, array $keyColumns): int;
+
+  /**
    * Move a table's ID generators (sequences) past the IDs already in it.
    * Needed where inserting explicit IDs does not advance the generator (PostgreSQL).
    *

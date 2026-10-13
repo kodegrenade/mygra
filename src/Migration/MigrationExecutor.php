@@ -9,8 +9,11 @@ use Mygra\Config\SchemaConfig;
 use Mygra\Transform\TransformPipeline;
 use Mygra\Logger\LoggerInterface;
 use Mygra\Logger\NullLogger;
+use Mygra\Schema\ColumnSchema;
 use Mygra\Schema\SchemaConverter;
+use Mygra\Schema\TableSchema;
 use Mygra\Validation\ValidationRunner;
+use Mygra\Support\Uuid;
 
 /**
  * Migration Executor
@@ -135,9 +138,17 @@ class MigrationExecutor
         $result->setMetadata('id_offset', $ids['offset']);
         $this->logger->info("{$schema->name}: new ID = old ID + {$ids['offset']}");
       }
+      if ($ids['kind'] === 'uuid') {
+        $result->setMetadata('id_uuid', "UUIDv5 of '{$schema->sourceTable}:<old id>'");
+      }
 
       $where = $schema->where;
       if ($this->options['resume'] ?? false) {
+        if ($ids['kind'] === 'uuid') {
+          throw new \InvalidArgumentException(
+            "Resume needs ordered IDs; '{$schema->name}' uses UUIDs. Rerun with --upsert instead: the UUIDs are deterministic, so it is safe"
+          );
+        }
         $where = $this->resumeWhere($schema, $where, $ids['offset']);
       }
 
@@ -183,13 +194,20 @@ class MigrationExecutor
       };
 
       $replacedCount = 0;
-      $load = function (array $batch) use ($schema, $ids, $rowError, &$insertedCount, &$processedCount, &$replacedCount): void {
+      // Upsert (final sync): rows already in the target are updated instead of failing on their key
+      $upsertKeys = null;
+      if ($schema->getOption('upsert', $this->options['upsert'] ?? false)) {
+        $upsertKeys = (array) ($this->target->getPrimaryKey($schema->targetTable)
+          ?? throw new \InvalidArgumentException("Upsert needs a primary key on target table '{$schema->targetTable}'"));
+      }
+
+      $load = function (array $batch) use ($schema, $ids, $rowError, $upsertKeys, &$insertedCount, &$processedCount, &$replacedCount): void {
         [$batch, $orphans, $replaced] = $this->resolveReferences($batch, $ids['refs']);
         $replacedCount += $replaced;
         foreach ($orphans as [$row, $errorMsg]) {
           $rowError($row, $errorMsg);
         }
-        $insertedCount += $this->flushBatch($schema->targetTable, $batch);
+        $insertedCount += $this->flushBatch($schema->targetTable, $batch, $upsertKeys);
         $processedCount += count($batch);
       };
 
@@ -288,14 +306,30 @@ class MigrationExecutor
     $columns = array_values($fieldMap);
     $ids = $this->idContext($schema, false);
 
-    $sourceRows = $invalidRows = 0;
-    $sourceSum = 0;
+    $quotedColumns = implode(', ', array_map([$this->target, 'quoteIdentifier'], $columns));
+    $targetFrom = "SELECT {$quotedColumns} FROM {$this->target->quoteIdentifier($schema->targetTable)}";
+
+    // UUID keys have no range to scan: fetch exactly the target rows Mygra wrote, by key, as source rows pass
+    $byKey = $ids['kind'] === 'uuid';
+
+    $sourceRows = $invalidRows = $targetRows = 0;
+    $sourceSum = $targetSum = 0;
     $pending = [];
-    $hashPending = function () use (&$pending, &$invalidRows, &$sourceSum, $ids, $columns): void {
+    $hashPending = function () use (&$pending, &$invalidRows, &$sourceSum, &$targetRows, &$targetSum, $ids, $columns, $byKey, $targetFrom): void {
       [$kept, $orphans] = $this->resolveReferences($pending, $ids['refs']);
       $invalidRows += count($orphans);
       foreach ($kept as $row) {
         $sourceSum = $this->addRowHash($sourceSum, $row, $columns);
+      }
+      if ($byKey) {
+        $key = $this->target->quoteIdentifier($ids['pk']);
+        foreach (array_chunk(array_column($kept, $ids['pk']), 1000) as $keys) {
+          $placeholders = implode(', ', array_fill(0, count($keys), '?'));
+          foreach ($this->target->query("{$targetFrom} WHERE {$key} IN ({$placeholders})", $keys) as $row) {
+            $targetRows++;
+            $targetSum = $this->addRowHash($targetSum, $row, $columns);
+          }
+        }
       }
       $pending = [];
     };
@@ -314,8 +348,7 @@ class MigrationExecutor
     }
     $hashPending();
 
-    $quotedColumns = implode(', ', array_map([$this->target, 'quoteIdentifier'], $columns));
-    $sql = "SELECT {$quotedColumns} FROM {$this->target->quoteIdentifier($schema->targetTable)}";
+    $sql = $targetFrom;
     $params = [];
     if ($ids['offset'] !== null) {
       // Merged into a table the app already used: only Mygra's ID range is ours to compare
@@ -329,9 +362,7 @@ class MigrationExecutor
       $sql .= " ORDER BY " . implode(', ', array_map([$this->target, 'quoteIdentifier'], (array) $pk));
     }
 
-    $targetRows = 0;
-    $targetSum = 0;
-    foreach ($this->target->streamQuery($sql, $params) as $row) {
+    foreach ($byKey ? [] : $this->target->streamQuery($sql, $params) as $row) {
       $targetRows++;
       $targetSum = $this->addRowHash($targetSum, $row, $columns);
     }
@@ -366,8 +397,8 @@ class MigrationExecutor
         }
       }
 
-      if ($ids['offset'] !== null && $transformed[$ids['pk']] !== null) {
-        $transformed[$ids['pk']] = (int) $transformed[$ids['pk']] + $ids['offset'];
+      if ($ids['kind'] !== null && $transformed[$ids['pk']] !== null) {
+        $transformed[$ids['pk']] = ($ids['map'])($transformed[$ids['pk']]);
       }
 
       return [$transformed, null];
@@ -388,7 +419,8 @@ class MigrationExecutor
 
   /**
    * Canonical string form, so drivers' formatting differences don't fail verification:
-   * sqlsrv returns numbers as strings, pgsql returns real booleans, DATETIME2 pads ".0000000".
+   * sqlsrv returns numbers as strings and UUIDs in upper case, pgsql returns real booleans,
+   * DATETIME2 pads ".0000000".
    */
   private static function normalizeValue(mixed $value): ?string
   {
@@ -396,6 +428,7 @@ class MigrationExecutor
       $value === null => null,
       is_bool($value) => $value ? '1' : '0',
       is_int($value), is_float($value), is_numeric($value) => (string) (0 + $value),
+      Uuid::isValid((string) $value) => strtolower((string) $value), // SQL Server returns UUIDs in upper case
       default => preg_replace('/^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)\.0*$/', '$1', (string) $value),
     };
   }
@@ -518,29 +551,41 @@ class MigrationExecutor
   /**
    * Flush a batch of rows to the target database.
    */
-  private function flushBatch(string $table, array $rows): int
+  /**
+   * @param string[]|null $upsertKeys Key columns to upsert on; null = plain insert
+   * @return int Rows written (inserted, or inserted/updated when upserting)
+   */
+  private function flushBatch(string $table, array $rows, ?array $upsertKeys): int
   {
     if (empty($rows)) {
       return 0;
     }
 
     if ($this->dryRun) {
-      $this->logger->debug("Dry run: Would insert " . count($rows) . " rows");
+      $this->logger->debug("Dry run: Would write " . count($rows) . " rows");
       return count($rows);
     }
 
     $columns = array_keys($rows[0]);
+    $write = function () use ($table, $columns, $rows, $upsertKeys): int {
+      if ($upsertKeys === null) {
+        return $this->target->batchInsert($table, $columns, $rows);
+      }
+      // Drivers count upserted rows differently (MySQL counts an update as 2); report rows written
+      $this->target->batchUpsert($table, $columns, $rows, $upsertKeys);
+      return count($rows);
+    };
 
     // Inside a single-mode transaction already
     if ($this->target->inTransaction()) {
-      return $this->target->batchInsert($table, $columns, $rows);
+      return $write();
     }
 
     // per_batch: the batch commits atomically, so resume never sees half a batch
     $this->target->beginTransaction();
-    $inserted = $this->target->batchInsert($table, $columns, $rows);
+    $written = $write();
     $this->target->commit();
-    return $inserted;
+    return $written;
   }
 
   /**
@@ -587,7 +632,7 @@ class MigrationExecutor
     foreach ($this->joinTables($schema->joins) as $table) {
       $joinSchemas[$table] = $this->source->getTableSchema($table);
     }
-    $targetTableSchema = $converter->convert($sourceTableSchema, $schema, $joinSchemas);
+    $targetTableSchema = $this->withUuidColumns($converter->convert($sourceTableSchema, $schema, $joinSchemas), $schema);
 
     // Generate SQL
     $driver = $this->target->getPdo()->getAttribute(\PDO::ATTR_DRIVER_NAME);
@@ -657,31 +702,31 @@ class MigrationExecutor
    */
   private function idContext(SchemaConfig $schema, bool $prepare): array
   {
-    $offset = null;
-    $pk = null;
-    if ($schema->getOption('remap_ids', false)) {
-      $pk = $this->targetKeyColumn($schema);
-      $offset = $prepare ? $this->prepareOffset($schema, $pk) : $this->requireOffset($schema->name, 'run migrate first');
-    }
+    $kind = self::remapKind($schema);
+    $pk = $kind ? $this->targetKeyColumn($schema) : null;
+    $offset = $kind === 'offset'
+      ? ($prepare ? $this->prepareOffset($schema, $pk) : $this->requireOffset($schema->name, 'run migrate first'))
+      : null;
+    $map = $this->idMap($schema, $offset);
 
     $refs = [];
-    foreach ($schema->references as $column => $ref) {
+    foreach ($schema->references as $name => $ref) {
       $self = $ref['schema'] === $schema->name;
       $parent = $self ? $schema : ($this->schemas[$ref['schema']]
         ?? throw new \InvalidArgumentException("Schema '{$schema->name}' references unknown schema '{$ref['schema']}'"));
 
-      $parentOffset = 0;
-      if ($parent->getOption('remap_ids', false)) {
+      $parentOffset = null;
+      if (self::remapKind($parent) === 'offset') {
         $parentOffset = $self ? $offset : $this->requireOffset($parent->name, "migrate it before '{$schema->name}'");
       }
 
       if ($ref['on_missing'] === 'replace') {
-        $this->assertReplacementMatchesNothing($column, $ref['replacement'], $parent, $parentOffset);
+        $this->assertReplacementMatchesNothing($name, $ref['replacement'], $parent, $parentOffset);
       }
 
       // A self-reference may point at a row later in this same run, so check the source instead
-      $refs[$column] = $ref + [
-        'offset' => $parentOffset,
+      $refs[$name] = $ref + [
+        'map' => $self ? $map : $this->idMap($parent, $parentOffset),
         'self' => $self,
         'db' => $self ? $this->source : $this->target,
         'table' => $self ? $parent->sourceTable : $parent->targetTable,
@@ -691,7 +736,72 @@ class MigrationExecutor
       ];
     }
 
-    return ['offset' => $offset, 'pk' => $pk, 'refs' => $refs];
+    return ['kind' => $kind, 'offset' => $offset, 'pk' => $pk, 'map' => $map, 'refs' => $refs];
+  }
+
+  /**
+   * Columns that will hold UUIDs (this schema's key with remap_ids: uuid, and plain references to such
+   * schemas) get a UUID type instead of the source's integer type.
+   */
+  private function withUuidColumns(TableSchema $table, SchemaConfig $schema): TableSchema
+  {
+    $uuidColumns = [];
+    if (self::remapKind($schema) === 'uuid') {
+      $uuidColumns[] = $this->targetKeyColumn($schema);
+    }
+    foreach ($schema->references as $ref) {
+      $parent = $ref['schema'] === $schema->name ? $schema : ($this->schemas[$ref['schema']] ?? null);
+      if ($ref['pattern'] === null && $parent && self::remapKind($parent) === 'uuid') {
+        $uuidColumns[] = $ref['column'];
+      }
+    }
+    if (!$uuidColumns) {
+      return $table;
+    }
+
+    $columns = $table->columns;
+    foreach ($uuidColumns as $name) {
+      $col = $columns[$name] ?? null;
+      if ($col) {
+        $columns[$name] = new ColumnSchema(
+          name: $col->name,
+          type: 'uuid',
+          nullable: $col->nullable,
+          isPrimaryKey: $col->isPrimaryKey,
+        );
+      }
+    }
+    return new TableSchema($table->name, $columns, $table->primaryKey, $table->foreignKeys, $table->indexes);
+  }
+
+  /**
+   * remap_ids: true / 'offset' (new ID = old + offset) or 'uuid' (new ID = UUIDv5 of the old); null = keep IDs.
+   */
+  private static function remapKind(SchemaConfig $schema): ?string
+  {
+    return match ($schema->getOption('remap_ids', false)) {
+      false, null => null,
+      true, 'offset' => 'offset',
+      'uuid' => 'uuid',
+      default => throw new \InvalidArgumentException("Schema '{$schema->name}': remap_ids must be true, offset or uuid"),
+    };
+  }
+
+  /**
+   * Old ID -> new ID for a schema. Identity when its IDs are kept.
+   */
+  private function idMap(SchemaConfig $schema, ?int $offset): \Closure
+  {
+    if (self::remapKind($schema) === 'uuid') {
+      $namespace = $schema->getOption('uuid_namespace', Uuid::MYGRA_NAMESPACE);
+      if (!Uuid::isValid($namespace)) {
+        throw new \InvalidArgumentException("Schema '{$schema->name}': uuid_namespace must be a UUID");
+      }
+      // Source table, not schema name: the same row keeps its UUID even if the config key is renamed
+      return fn($old) => Uuid::v5($namespace, "{$schema->sourceTable}:{$old}");
+    }
+    // Offset 0 = parent keeps its IDs; leave values (possibly string keys) untouched
+    return $offset ? fn($old) => (int) $old + $offset : fn($old) => $old;
   }
 
   /**
@@ -709,9 +819,7 @@ class MigrationExecutor
 
     foreach ($refs as $ref) {
       $column = $ref['column'];
-      // Offset 0 = parent keeps its IDs; leave values (possibly string keys) untouched
-      $toNew = fn($v) => $ref['offset'] ? (int) $v + $ref['offset'] : $v;
-      $toOld = fn($v) => $ref['offset'] ? (int) $v - $ref['offset'] : $v;
+      $toNew = $ref['map'];
 
       // The IDs a row holds: the column itself, or every ID the pattern finds in its text
       $idsIn = fn($value) => match (true) {
@@ -725,11 +833,13 @@ class MigrationExecutor
       $found = [];
       foreach (array_chunk($old, 1000) as $chunk) {
         $lookup = $ref['self'] ? $chunk : array_map($toNew, $chunk);
+        // Looked-up value -> old ID; lowercased because SQL Server returns UUIDs in upper case
+        $oldOf = array_combine(array_map(fn($v) => strtolower((string) $v), $lookup), $chunk);
         $placeholders = implode(', ', array_fill(0, count($lookup), '?'));
         $key = $ref['db']->quoteIdentifier($ref['key']);
         $sql = "SELECT {$key} AS k FROM {$ref['db']->quoteIdentifier($ref['table'])} WHERE {$key} IN ({$placeholders})";
         foreach ($ref['db']->query($sql, $lookup) as $hit) {
-          $found[(string) ($ref['self'] ? $hit['k'] : $toOld($hit['k']))] = true;
+          $found[(string) $oldOf[strtolower((string) $hit['k'])]] = true;
         }
       }
 
@@ -816,11 +926,19 @@ class MigrationExecutor
    * on_missing: replace must never write a value that points at a real parent row,
    * neither one already in the target nor one this migration will create.
    */
-  private function assertReplacementMatchesNothing(string $column, string $replacement, SchemaConfig $parent, int $offset): void
+  private function assertReplacementMatchesNothing(string $column, string $replacement, SchemaConfig $parent, ?int $offset): void
   {
-    $candidates = [[$this->target, $parent->targetTable, $replacement]];
-    if (is_numeric($replacement)) {
-      $candidates[] = [$this->source, $parent->sourceTable, (string) ((int) $replacement - $offset)];
+    $candidates = [];
+    if (self::remapKind($parent) === 'uuid') {
+      // Only a UUID can match a UUID key; one Mygra derives can't be predicted, so check the target only
+      if (Uuid::isValid($replacement)) {
+        $candidates[] = [$this->target, $parent->targetTable, $replacement];
+      }
+    } else {
+      $candidates[] = [$this->target, $parent->targetTable, $replacement];
+      if (is_numeric($replacement)) {
+        $candidates[] = [$this->source, $parent->sourceTable, (string) ((int) $replacement - (int) $offset)];
+      }
     }
 
     foreach ($candidates as [$db, $table, $value]) {

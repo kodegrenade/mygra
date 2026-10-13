@@ -122,6 +122,16 @@ Set `settings.transaction_mode` (or per schema under `options:`):
 php mygra migrate --schema=users --resume
 ```
 
+### Final sync before cutover
+
+While the old app keeps running, rows keep changing. Rerun the migration with `--upsert` just before switching over: rows that already exist in the target (matched on its primary key) are updated, new rows are inserted. Set `upsert: true` under a schema's `options:` to make it the default for that schema.
+
+```bash
+php mygra migrate --upsert
+```
+
+Rows deleted from the source since the first run are not deleted from the target.
+
 ## Migration Order
 
 When migrating all schemas, Mygra runs parents before children: a schema waits for any schema whose source table its source table references by foreign key. Sources without declared foreign keys (e.g. MyISAM, WordPress) can state dependencies explicitly:
@@ -162,7 +172,27 @@ schemas:
 - A reference to a row that does not exist (e.g. a post by a deleted user) is a row error and follows `on_error`. Use `author_id: { schema: users, on_missing: null }` to keep the row with a NULL reference instead.
 - A schema can reference itself (`parent_id: categories`).
 - Offsets are stored in a `mygra_offsets` table in the target. `verify` uses them to check every reference points at the right parent, and a passing `verify` over all schemas removes the table.
-- Needs a single-column integer primary key.
+- Needs a single-column primary key in the source.
+
+### UUID keys
+
+When the target uses UUID primary keys, set `remap_ids: uuid`. Each new ID is a UUIDv5 of `"<source table>:<old id>"`, so the same row always gets the same UUID, and references to that schema follow automatically:
+
+```yaml
+schemas:
+  users:
+    source_table: wp_users
+    target_table: users
+    fields: { ID: id, user_email: email }
+    options:
+      remap_ids: uuid
+      # uuid_namespace: 0d6c6a0e-2b1f-4f6a-8e8e-5f1c2b7d9a10
+```
+
+- Because the UUIDs are deterministic, a rerun with `--upsert` is always safe. `--resume` is not available for UUID schemas (UUIDs have no order to resume from).
+- Migrating several sources with the same table names into one target (two shops, two sites)? Give each source its own `uuid_namespace`, or their user 7s get the same UUID: the second insert fails on a duplicate key, and with `--upsert` it would overwrite the first.
+- With `--create`, the key and every reference to a UUID schema are created as `UUID` / `UNIQUEIDENTIFIER` / `CHAR(36)`.
+- To redirect old URLs, compute the same UUIDv5 (namespace `5b0f8e3a-7c41-4d2e-9a6b-6d7967726101` unless you set one).
 
 ### IDs inside text
 
