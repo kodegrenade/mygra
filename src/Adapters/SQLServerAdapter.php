@@ -449,14 +449,26 @@ class SQLServerAdapter extends AbstractAdapter
   public function reserveIds(string $table, int $next): void
   {
     $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-    $current = $this->query("SELECT IDENT_CURRENT(?) AS cur", [$qualified])[0]['cur'] ?? null;
-
-    // No identity column, or already far enough; RESEED can also move it backwards, so never lower it
-    if ($current === null || (int) $current >= $next) {
-      return;
+    $identity = $this->query(
+      "SELECT CAST(last_value AS BIGINT) AS last_value FROM sys.identity_columns WHERE object_id = OBJECT_ID(?)",
+      [$qualified]
+    );
+    if (!$identity) {
+      return; // No identity column
     }
-    // Reseed to $next, not $next - 1: on a table that never had rows the next ID is the reseed value itself
-    $this->getPdo()->exec("DBCC CHECKIDENT ({$this->quote($qualified)}, RESEED, {$next})");
+
+    // RESEED n: the next ID is n + 1 once the column has handed out a value (last_value set),
+    // but n itself while it never has (last_value NULL)
+    $last = $identity[0]['last_value'];
+    if ($last === null) {
+      $reseed = $next;
+    } elseif ((int) $last >= $next - 1) {
+      return; // Already far enough; RESEED could move it backwards
+    } else {
+      $reseed = $next - 1;
+    }
+
+    $this->getPdo()->exec("DBCC CHECKIDENT ({$this->quote($qualified)}, RESEED, {$reseed})");
   }
 
   /**
