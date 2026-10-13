@@ -19,16 +19,21 @@ class RegexValidator implements ValidatorInterface
       return true;
     }
 
-    return (bool) preg_match($pattern, (string)$value);
+    return (bool) preg_match($pattern, (string) $value);
   }
 
   public function getMessage(): string
   {
-    return "Value does not match required pattern";
+    return 'Value does not match required pattern';
   }
 
   public function getName(): string
   {
     return 'regex';
+  }
+
+  public function getOptionNames(): array
+  {
+    return ['pattern'];
   }
 }

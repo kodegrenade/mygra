@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * Abstract Database Adapter
- * 
+ *
  * Provides common functionality for all database adapters.
  * Concrete adapters should extend this class and implement driver-specific methods.
  */
@@ -31,19 +31,9 @@ abstract class AbstractAdapter implements AdapterInterface
 
   abstract public function connect(array $config): void;
 
-  public function disconnect(): void
+  protected function getPdo(): \PDO
   {
-    $this->pdo = null;
-  }
-
-  public function isConnected(): bool
-  {
-    return $this->pdo !== null;
-  }
-
-  public function getPdo(): \PDO
-  {
-    if (!$this->isConnected()) {
+    if ($this->pdo === null) {
       throw new \RuntimeException('Not connected to database');
     }
     return $this->pdo;
@@ -83,10 +73,10 @@ abstract class AbstractAdapter implements AdapterInterface
 
   abstract public function getTables(): array;
   abstract public function getTableSchema(string $table): TableSchema;
-  abstract public function getColumns(string $table): array;
+  abstract protected function getColumns(string $table): array;
   abstract public function getPrimaryKey(string $table): string|array|null;
   abstract public function getForeignKeys(string $table): array;
-  abstract public function getIndexes(string $table): array;
+  abstract protected function getIndexes(string $table): array;
 
   // =========================================================================
   // Transaction Support
@@ -112,33 +102,18 @@ abstract class AbstractAdapter implements AdapterInterface
     return $this->getPdo()->inTransaction();
   }
 
-  public function savepoint(string $name): void
-  {
-    $this->execute("SAVEPOINT " . $this->quoteIdentifier($name));
-  }
-
-  public function rollbackToSavepoint(string $name): void
-  {
-    $this->execute("ROLLBACK TO SAVEPOINT " . $this->quoteIdentifier($name));
-  }
-
-  public function releaseSavepoint(string $name): void
-  {
-    $this->execute("RELEASE SAVEPOINT " . $this->quoteIdentifier($name));
-  }
-
   // =========================================================================
   // Batch Operations
   // =========================================================================
 
   public function batchInsert(string $table, array $columns, array $rows): int
   {
-    return $this->writeRows($this->quoteIdentifier($table), $columns, $rows, '');
+    return $this->writeRows($this->quoteTable($table), $columns, $rows, '');
   }
 
   public function batchUpsert(string $table, array $columns, array $rows, array $keyColumns): int
   {
-    return $this->writeRows($this->quoteIdentifier($table), $columns, $rows, $this->upsertClause($columns, $keyColumns));
+    return $this->writeRows($this->quoteTable($table), $columns, $rows, $this->upsertClause($columns, $keyColumns));
   }
 
   /**
@@ -169,7 +144,7 @@ abstract class AbstractAdapter implements AdapterInterface
   {
     $q = [$this, 'quoteIdentifier'];
     $updates = array_map(fn($c) => "{$q($c)} = EXCLUDED.{$q($c)}", array_diff($columns, $keyColumns));
-    return " ON CONFLICT (" . implode(', ', array_map($q, $keyColumns)) . ") "
+    return ' ON CONFLICT (' . implode(', ', array_map($q, $keyColumns)) . ') '
       . ($updates ? 'DO UPDATE SET ' . implode(', ', $updates) : 'DO NOTHING');
   }
 
@@ -197,9 +172,9 @@ abstract class AbstractAdapter implements AdapterInterface
 
   public function getRowCount(string $table, ?string $where = null): int
   {
-    $sql = "SELECT COUNT(*) as cnt FROM " . $this->quoteIdentifier($table);
+    $sql = 'SELECT COUNT(*) as cnt FROM ' . $this->quoteTable($table);
     if ($where !== null) {
-      $sql .= " WHERE " . $where;
+      $sql .= ' WHERE ' . $where;
     }
 
     $result = $this->query($sql);
@@ -216,16 +191,11 @@ abstract class AbstractAdapter implements AdapterInterface
     // ponytail: no-op for SQLite (rowid = max + 1); add sqlite_sequence handling if a live SQLite target ever matters
   }
 
-  public function getLastInsertId(?string $sequenceName = null): string|false
-  {
-    return $this->getPdo()->lastInsertId($sequenceName);
-  }
-
   // =========================================================================
   // Utility Methods
   // =========================================================================
 
-  public function quote(string $value): string
+  protected function quote(string $value): string
   {
     return $this->getPdo()->quote($value);
   }
@@ -238,19 +208,24 @@ abstract class AbstractAdapter implements AdapterInterface
     return '`' . $identifier . '`';
   }
 
+  public function quoteTable(string $table): string
+  {
+    return $this->quoteIdentifier($table);
+  }
+
+  public function limit(string $sql, int $count): string
+  {
+    return "{$sql} LIMIT {$count}";
+  }
+
   public function getDriverName(): string
   {
     return $this->driver;
   }
 
-  public function getPlaceholderStyle(): string
-  {
-    return 'positional'; // Default to ? style placeholders
-  }
-
-    // =========================================================================
-    // Helper Methods
-    // =========================================================================
+  // =========================================================================
+  // Helper Methods
+  // =========================================================================
 
   /**
    * Build a TableSchema from column data.
@@ -274,7 +249,7 @@ abstract class AbstractAdapter implements AdapterInterface
       columns: $columns,
       primaryKey: $primaryKey,
       foreignKeys: $this->getForeignKeys($table),
-      indexes: $this->getIndexes($table)
+      indexes: $this->getIndexes($table),
     );
   }
 

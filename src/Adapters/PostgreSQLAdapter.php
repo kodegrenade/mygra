@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * PostgreSQL Database Adapter
- * 
+ *
  * Full-featured PostgreSQL adapter with schema introspection,
  * transaction support with savepoints, and streaming capabilities.
  */
@@ -47,20 +47,11 @@ class PostgreSQLAdapter extends AbstractAdapter
       $dsn,
       $config['user'] ?? 'postgres',
       $config['password'] ?? '',
-      $options
+      $options,
     );
 
     // Set search path to the specified schema
-    $this->pdo->exec("SET search_path TO " . $this->quoteIdentifier($this->schema));
-  }
-
-  /**
-   * Set the active schema (search_path).
-   */
-  public function setSchema(string $schema): void
-  {
-    $this->schema = $schema;
-    $this->execute("SET search_path TO " . $this->quoteIdentifier($schema));
+    $this->pdo->exec('SET search_path TO ' . $this->quoteIdentifier($this->schema));
   }
 
   public function streamQuery(string $sql, array $params = []): \Generator
@@ -108,7 +99,7 @@ class PostgreSQLAdapter extends AbstractAdapter
              WHERE table_schema = ? 
              AND table_type = 'BASE TABLE'
              ORDER BY table_name",
-      [$this->schema]
+      [$this->schema],
     );
 
     return array_column($result, 'table_name');
@@ -120,7 +111,7 @@ class PostgreSQLAdapter extends AbstractAdapter
     return $this->buildTableSchema($table, $columnsData);
   }
 
-  public function getColumns(string $table): array
+  protected function getColumns(string $table): array
   {
     return $this->query(
       "SELECT 
@@ -153,7 +144,7 @@ class PostgreSQLAdapter extends AbstractAdapter
              WHERE c.table_schema = ? 
              AND c.table_name = ?
              ORDER BY c.ordinal_position",
-      [$this->schema, $table, $this->schema, $table]
+      [$this->schema, $table, $this->schema, $table],
     );
   }
 
@@ -169,7 +160,7 @@ class PostgreSQLAdapter extends AbstractAdapter
              AND tc.table_name = ?
              AND tc.constraint_type = 'PRIMARY KEY'
              ORDER BY kcu.ordinal_position",
-      [$this->schema, $table]
+      [$this->schema, $table],
     );
 
     if (empty($result)) {
@@ -198,7 +189,7 @@ class PostgreSQLAdapter extends AbstractAdapter
              WHERE tc.table_schema = ?
              AND tc.table_name = ?
              AND tc.constraint_type = 'FOREIGN KEY'",
-      [$this->schema, $table]
+      [$this->schema, $table],
     );
 
     $foreignKeys = [];
@@ -214,10 +205,10 @@ class PostgreSQLAdapter extends AbstractAdapter
     return $foreignKeys;
   }
 
-  public function getIndexes(string $table): array
+  protected function getIndexes(string $table): array
   {
     $result = $this->query(
-      "SELECT
+      'SELECT
                 i.relname as index_name,
                 a.attname as column_name,
                 ix.indisunique as is_unique,
@@ -229,8 +220,8 @@ class PostgreSQLAdapter extends AbstractAdapter
              JOIN pg_namespace n ON n.oid = t.relnamespace
              WHERE n.nspname = ?
              AND t.relname = ?
-             ORDER BY i.relname, a.attnum",
-      [$this->schema, $table]
+             ORDER BY i.relname, a.attnum',
+      [$this->schema, $table],
     );
 
     $indexes = [];
@@ -278,11 +269,11 @@ class PostgreSQLAdapter extends AbstractAdapter
       "SELECT column_name FROM information_schema.columns
              WHERE table_schema = ? AND table_name = ?
              AND (column_default LIKE 'nextval(%' OR is_identity = 'YES')",
-      [$this->schema, $table]
+      [$this->schema, $table],
     );
 
     foreach (array_column($columns, 'column_name') as $column) {
-      $sequence = $this->query("SELECT pg_get_serial_sequence(?, ?) AS seq", [$qualified, $column])[0]['seq'] ?? null;
+      $sequence = $this->query('SELECT pg_get_serial_sequence(?, ?) AS seq', [$qualified, $column])[0]['seq'] ?? null;
       $max = $this->query("SELECT MAX({$this->quoteIdentifier($column)}) AS max_id FROM {$qualified}")[0]['max_id'] ?? 0;
       $value = max((int) $max, $floor);
       if ($sequence === null || $value < 1) {
@@ -301,42 +292,6 @@ class PostgreSQLAdapter extends AbstractAdapter
     // PostgreSQL uses double quotes for identifier quoting
     $identifier = str_replace('"', '""', $identifier);
     return '"' . $identifier . '"';
-  }
-
-  public function getPlaceholderStyle(): string
-  {
-    return 'positional'; // PDO binds ? and rewrites it to $n itself; raw $n placeholders silently match nothing
-  }
-
-  /**
-   * Get the current schema.
-   */
-  public function getCurrentSchema(): string
-  {
-    return $this->schema;
-  }
-
-  /**
-   * Get PostgreSQL server version.
-   */
-  public function getServerVersion(): string
-  {
-    $result = $this->query("SELECT version()");
-    return $result[0]['version'] ?? '';
-  }
-
-  /**
-   * Get all available schemas.
-   */
-  public function getSchemas(): array
-  {
-    $result = $this->query(
-      "SELECT schema_name 
-             FROM information_schema.schemata 
-             WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
-             ORDER BY schema_name"
-    );
-    return array_column($result, 'schema_name');
   }
 
   // =========================================================================
@@ -369,7 +324,7 @@ class PostgreSQLAdapter extends AbstractAdapter
       isAutoIncrement: $isAutoIncrement,
       isUnique: false, // Would need separate query
       comment: $columnData['column_comment'] ?? null,
-      extra: []
+      extra: [],
     );
   }
 

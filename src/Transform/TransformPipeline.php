@@ -6,7 +6,7 @@ namespace Mygra\Transform;
 
 /**
  * Transform Pipeline
- * 
+ *
  * Orchestrates the execution of transformers on data rows.
  * Allows registering transformers and defining field-specific transformation chains.
  */
@@ -17,9 +17,6 @@ class TransformPipeline
 
   /** @var array<string, array> Field-specific transformer configurations */
   private array $fieldTransformers = [];
-
-  /** @var array<string, callable> Global row transformers */
-  private array $rowTransformers = [];
 
   /**
    * Register a transformer by its name.
@@ -51,7 +48,16 @@ class TransformPipeline
    */
   public function forField(string $field, string|array $transformers): self
   {
-    $this->fieldTransformers[$field] = $this->normalizeTransformerConfig($transformers);
+    $configs = $this->normalizeTransformerConfig($transformers);
+    // Fail once here rather than on every row (with on_error: skip, every row would be skipped)
+    foreach ($configs as $config) {
+      if (!isset($this->transformers[$config['transformer']])) {
+        throw new \InvalidArgumentException(
+          "Unknown transformer '{$config['transformer']}' for field '{$field}'; use one of: " . implode(', ', array_keys($this->transformers)),
+        );
+      }
+    }
+    $this->fieldTransformers[$field] = $configs;
     return $this;
   }
 
@@ -61,18 +67,6 @@ class TransformPipeline
   public function clearFieldTransformers(): self
   {
     $this->fieldTransformers = [];
-    return $this;
-  }
-
-  /**
-   * Add a row transformer (operates on entire row).
-   *
-   * @param string $name Unique name for this row transformer
-   * @param callable $transformer Function that receives and returns a row array
-   */
-  public function addRowTransformer(string $name, callable $transformer): self
-  {
-    $this->rowTransformers[$name] = $transformer;
     return $this;
   }
 
@@ -97,16 +91,11 @@ class TransformPipeline
           $value,
           $this->fieldTransformers[$targetField],
           // The row goes under its own key: merged in, a column named like an option (type, prefix, ...) became that option
-          ['_row' => $row, '_source_field' => $sourceField, '_target_field' => $targetField]
+          ['_row' => $row, '_source_field' => $sourceField, '_target_field' => $targetField],
         );
       }
 
       $result[$targetField] = $value;
-    }
-
-    // Apply row transformers
-    foreach ($this->rowTransformers as $transformer) {
-      $result = $transformer($result, $row);
     }
 
     return $result;
@@ -124,14 +113,6 @@ class TransformPipeline
     foreach ($rows as $row) {
       yield $this->process($row, $fieldMap);
     }
-  }
-
-  /**
-   * Get a registered transformer by name.
-   */
-  public function getTransformer(string $name): ?TransformerInterface
-  {
-    return $this->transformers[$name] ?? null;
   }
 
   /**
@@ -159,7 +140,7 @@ class TransformPipeline
 
       $value = $this->transformers[$name]->transform(
         $value,
-        array_merge($context, $options)
+        array_merge($context, $options),
       );
     }
 

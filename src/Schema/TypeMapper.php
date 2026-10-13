@@ -6,7 +6,7 @@ namespace Mygra\Schema;
 
 /**
  * Type Mapper
- * 
+ *
  * Maps database-agnostic types to driver-specific types and vice versa.
  */
 class TypeMapper
@@ -95,26 +95,6 @@ class TypeMapper
     $driver = strtolower($driver);
 
     return self::$typeMap[$type][$driver] ?? strtoupper($type);
-  }
-
-  /**
-   * Map a driver-specific type to a database-agnostic type.
-   * This is an approximation based on common types.
-   */
-  public static function coreType(string $nativeType, string $driver): string
-  {
-    $nativeType = strtoupper($nativeType);
-    $driver = strtolower($driver);
-
-    foreach (self::$typeMap as $agnosticType => $drivers) {
-      foreach ($drivers as $d => $n) {
-        if ($d === $driver && strpos($nativeType, strtoupper($n)) === 0) {
-          return $agnosticType;
-        }
-      }
-    }
-
-    return 'string'; // Fallback
   }
 
   /**

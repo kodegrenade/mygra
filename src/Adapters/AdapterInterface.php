@@ -8,15 +8,15 @@ use Mygra\Schema\TableSchema;
 
 /**
  * Database Adapter Interface
- * 
+ *
  * Defines the contract for all database adapters, providing a unified API
  * for database operations across different vendors (MySQL, PostgreSQL, SQLite, SQL Server).
  */
 interface AdapterInterface
 {
-    // =========================================================================
-    // Connection Management
-    // =========================================================================
+  // =========================================================================
+  // Connection Management
+  // =========================================================================
 
   /**
    * Establish a connection to the database.
@@ -26,24 +26,9 @@ interface AdapterInterface
    */
   public function connect(array $config): void;
 
-  /**
-   * Close the database connection.
-   */
-  public function disconnect(): void;
-
-  /**
-   * Check if a connection is currently active.
-   */
-  public function isConnected(): bool;
-
-  /**
-   * Get the underlying PDO instance.
-   */
-  public function getPdo(): \PDO;
-
-    // =========================================================================
-    // Query Execution
-    // =========================================================================
+  // =========================================================================
+  // Query Execution
+  // =========================================================================
 
   /**
    * Execute a SELECT query and return all results.
@@ -72,9 +57,9 @@ interface AdapterInterface
    */
   public function streamQuery(string $sql, array $params = []): \Generator;
 
-    // =========================================================================
-    // Schema Introspection
-    // =========================================================================
+  // =========================================================================
+  // Schema Introspection
+  // =========================================================================
 
   /**
    * Get a list of all tables in the database.
@@ -92,14 +77,6 @@ interface AdapterInterface
   public function getTableSchema(string $table): TableSchema;
 
   /**
-   * Get column information for a table.
-   *
-   * @param string $table Table name
-   * @return array Array of column metadata
-   */
-  public function getColumns(string $table): array;
-
-  /**
    * Get the primary key column(s) for a table.
    *
    * @param string $table Table name
@@ -115,17 +92,9 @@ interface AdapterInterface
    */
   public function getForeignKeys(string $table): array;
 
-  /**
-   * Get index information for a table.
-   *
-   * @param string $table Table name
-   * @return array Array of index definitions
-   */
-  public function getIndexes(string $table): array;
-
-    // =========================================================================
-    // Transaction Support
-    // =========================================================================
+  // =========================================================================
+  // Transaction Support
+  // =========================================================================
 
   /**
    * Begin a new transaction.
@@ -147,30 +116,9 @@ interface AdapterInterface
    */
   public function inTransaction(): bool;
 
-  /**
-   * Create a savepoint within the current transaction.
-   *
-   * @param string $name Savepoint name
-   */
-  public function savepoint(string $name): void;
-
-  /**
-   * Roll back to a specific savepoint.
-   *
-   * @param string $name Savepoint name
-   */
-  public function rollbackToSavepoint(string $name): void;
-
-  /**
-   * Release a savepoint.
-   *
-   * @param string $name Savepoint name
-   */
-  public function releaseSavepoint(string $name): void;
-
-    // =========================================================================
-    // Batch Operations
-    // =========================================================================
+  // =========================================================================
+  // Batch Operations
+  // =========================================================================
 
   /**
    * Insert multiple rows in a single operation.
@@ -219,25 +167,9 @@ interface AdapterInterface
    */
   public function getRowCount(string $table, ?string $where = null): int;
 
-  /**
-   * Get the last inserted ID.
-   *
-   * @param string|null $sequenceName Sequence name (for PostgreSQL)
-   * @return string|false The last insert ID or false on failure
-   */
-  public function getLastInsertId(?string $sequenceName = null): string|false;
-
-    // =========================================================================
-    // Utility Methods
-    // =========================================================================
-
-  /**
-   * Quote a string value for safe use in SQL.
-   *
-   * @param string $value Value to quote
-   * @return string Quoted value
-   */
-  public function quote(string $value): string;
+  // =========================================================================
+  // Utility Methods
+  // =========================================================================
 
   /**
    * Quote an identifier (table/column name) for safe use in SQL.
@@ -248,13 +180,17 @@ interface AdapterInterface
   public function quoteIdentifier(string $identifier): string;
 
   /**
+   * Quote a table name, qualified with the connection's schema where the driver needs it (SQL Server).
+   */
+  public function quoteTable(string $table): string;
+
+  /**
+   * Limit a query that already has an ORDER BY to its first $count rows.
+   */
+  public function limit(string $sql, int $count): string;
+
+  /**
    * Get the driver name (mysql, pgsql, sqlite, sqlsrv).
    */
   public function getDriverName(): string;
-
-  /**
-   * Get driver-specific placeholder style.
-   * Returns 'named' (e.g., :param) or 'positional' (e.g., ?, $1).
-   */
-  public function getPlaceholderStyle(): string;
 }

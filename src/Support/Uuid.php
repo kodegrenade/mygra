@@ -22,7 +22,7 @@ final class Uuid
       substr($hash, 8, 4),
       (hexdec(substr($hash, 12, 4)) & 0x0fff) | 0x5000, // version 5
       (hexdec(substr($hash, 16, 4)) & 0x3fff) | 0x8000, // RFC variant
-      substr($hash, 20, 12)
+      substr($hash, 20, 12),
     );
   }
 

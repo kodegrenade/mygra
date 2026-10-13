@@ -6,7 +6,7 @@ namespace Mygra\Validation;
 
 /**
  * Validation Result
- * 
+ *
  * Stores validation status and errors for a single row or field.
  */
 class ValidationResult

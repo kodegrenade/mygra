@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Transform;
 
-use PHPUnit\Framework\TestCase;
-use Mygra\Transform\TransformPipeline;
 use Mygra\Transform\Transformers\DateTransformer;
+use Mygra\Transform\TransformPipeline;
+use PHPUnit\Framework\TestCase;
 
 class TransformPipelineTest extends TestCase
 {
@@ -16,13 +16,13 @@ class TransformPipelineTest extends TestCase
 
     $batch = [
       ['username' => 'testuser', 'email' => 'TEST@EXAMPLE.COM', 'status' => '1'],
-      ['username' => 'admin', 'email' => 'ADMIN@MYGRA.APP', 'status' => '0']
+      ['username' => 'admin', 'email' => 'ADMIN@MYGRA.APP', 'status' => '0'],
     ];
 
     $mappings = [
       'username' => 'user_login',
       'email' => 'user_email',
-      'status' => 'user_status'
+      'status' => 'user_status',
     ];
 
     $pipeline->forField('user_email', [['string' => ['case' => 'lower']]]);

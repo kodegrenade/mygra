@@ -8,7 +8,7 @@ use Mygra\Config\SchemaConfig;
 
 /**
  * Schema Converter
- * 
+ *
  * Converts a source TableSchema into a target TableSchema
  * according to the provided SchemaConfig and field mappings.
  */
@@ -46,7 +46,7 @@ class SchemaConverter
         isAutoIncrement: $sourceColumn->isAutoIncrement,
         isUnique: $sourceColumn->isUnique,
         comment: $sourceColumn->comment,
-        extra: $sourceColumn->extra
+        extra: $sourceColumn->extra,
       );
 
       if ($sourceColumn->isPrimaryKey) {
@@ -67,7 +67,7 @@ class SchemaConverter
       columns: $targetColumns,
       primaryKey: $targetPrimaryKey,
       foreignKeys: [], // Skip foreign keys for now to simplify initial creation
-      indexes: []     // Skip indexes for now
+      indexes: [],     // Skip indexes for now
     );
   }
 

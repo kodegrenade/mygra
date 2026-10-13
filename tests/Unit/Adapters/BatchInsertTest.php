@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Adapters;
 
-use PHPUnit\Framework\TestCase;
 use Mygra\Adapters\SQLiteAdapter;
+use PHPUnit\Framework\TestCase;
 
 class BatchInsertTest extends TestCase
 {
@@ -17,7 +17,7 @@ class BatchInsertTest extends TestCase
 
     $db = new SQLiteAdapter();
     $db->connect(['database' => ':memory:']);
-    $db->execute("CREATE TABLE wide (" . implode(', ', array_map(fn($c) => "{$c} INT", $columns)) . ")");
+    $db->execute('CREATE TABLE wide (' . implode(', ', array_map(fn($c) => "{$c} INT", $columns)) . ')');
 
     $this->assertSame(1000, $db->batchInsert('wide', $columns, $rows));
     $this->assertSame(1000, $db->getRowCount('wide'));

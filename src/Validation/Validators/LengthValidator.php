@@ -16,7 +16,7 @@ class LengthValidator implements ValidatorInterface
       return true;
     }
 
-    $length = is_string($value) ? mb_strlen($value) : count((array)$value);
+    $length = is_string($value) ? mb_strlen($value) : count((array) $value);
     $min = $options['min'] ?? null;
     $max = $options['max'] ?? null;
 
@@ -41,5 +41,10 @@ class LengthValidator implements ValidatorInterface
   public function getName(): string
   {
     return 'length';
+  }
+
+  public function getOptionNames(): array
+  {
+    return ['min', 'max'];
   }
 }

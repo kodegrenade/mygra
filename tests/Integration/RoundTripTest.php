@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Integration;
 
-use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\TestCase;
 use Mygra\Adapters\AdapterFactory;
 use Mygra\Adapters\AdapterInterface;
 use Mygra\Config\SchemaConfig;
 use Mygra\Migration\MigrationExecutor;
 use Mygra\Migration\SchemaOrder;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
 
 /**
  * SQLite -> real database -> SQLite round trip.
@@ -44,13 +44,13 @@ class RoundTripTest extends TestCase
     }
 
     $db = AdapterFactory::create($config);
-    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_users'));
+    $db->execute('DROP TABLE IF EXISTS ' . $db->quoteIdentifier('mygra_it_users'));
 
     $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
-    $sqlite->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, pid INT, note TEXT)");
-    $sqlite->execute("CREATE TABLE profiles (id INT, bio TEXT)");
+    $sqlite->execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, pid INT, note TEXT)');
+    $sqlite->execute('CREATE TABLE profiles (id INT, bio TEXT)');
     $sqlite->execute("INSERT INTO profiles VALUES (10, 'hello')");
-    $insert = "INSERT INTO users VALUES (?, ?, ?, ?, ?)";
+    $insert = 'INSERT INTO users VALUES (?, ?, ?, ?, ?)';
     $sqlite->execute($insert, [1, "O'Brien", 'OB@X.COM', 10, null]);
     $sqlite->execute($insert, [2, 'Zoë', 'zoe@x.com', null, 'multi; statement --']);
 
@@ -73,7 +73,7 @@ class RoundTripTest extends TestCase
 
     // Verify normalizes each driver's value formatting (sqlsrv strings, pgsql booleans, ...)
     $verify = (new MigrationExecutor($sqlite, $db))->verify(SchemaConfig::fromArray('it', $toDb));
-    $this->assertTrue($verify['match'], json_encode($verify));
+    $this->assertTrue($verify->matches(), json_encode($verify->toArray()));
 
     // database -> SQLite: read back through the database's streaming path
     $this->migrate($db, $sqlite, [
@@ -84,7 +84,7 @@ class RoundTripTest extends TestCase
     ]);
 
     // Loose compare: some drivers (sqlsrv) return numbers as strings
-    $this->assertEquals(self::EXPECTED, $sqlite->query("SELECT id, name, email, bio, note FROM back ORDER BY id"));
+    $this->assertEquals(self::EXPECTED, $sqlite->query('SELECT id, name, email, bio, note FROM back ORDER BY id'));
   }
 
   #[DataProvider('databases')]
@@ -94,7 +94,7 @@ class RoundTripTest extends TestCase
     $table = $db->quoteIdentifier('mygra_it_seq');
 
     $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
-    $sqlite->execute("CREATE TABLE src (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute('CREATE TABLE src (id INTEGER PRIMARY KEY, name TEXT)');
     $sqlite->execute("INSERT INTO src VALUES (1, 'a'), (2, 'b')");
 
     $this->migrate($sqlite, $db, [
@@ -134,10 +134,10 @@ class RoundTripTest extends TestCase
     $db->execute("DROP TABLE IF EXISTS {$db->quoteIdentifier('mygra_offsets')}");
 
     $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
-    $sqlite->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
     $sqlite->execute("INSERT INTO users VALUES (1, 'ada'), (2, 'bo')");
-    $sqlite->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT)");
-    $sqlite->execute("INSERT INTO posts VALUES (1, 2), (2, 1)");
+    $sqlite->execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT)');
+    $sqlite->execute('INSERT INTO posts VALUES (1, 2), (2, 1)');
 
     $schemas = [
       'users' => SchemaConfig::fromArray('users', [
@@ -160,7 +160,7 @@ class RoundTripTest extends TestCase
     // ada 1 -> 3, bo 2 -> 4; posts follow
     $this->assertEquals(
       [['id' => 1, 'name' => 'bo'], ['id' => 2, 'name' => 'ada']],
-      $db->query("SELECT p.id, u.name FROM {$db->quoteIdentifier('mygra_it_posts2')} p JOIN {$db->quoteIdentifier('mygra_it_users2')} u ON u.id = p.author_id ORDER BY p.id")
+      $db->query("SELECT p.id, u.name FROM {$db->quoteIdentifier('mygra_it_posts2')} p JOIN {$db->quoteIdentifier('mygra_it_users2')} u ON u.id = p.author_id ORDER BY p.id"),
     );
 
     // The app's next user lands after Mygra's range
@@ -168,7 +168,7 @@ class RoundTripTest extends TestCase
     $this->assertEquals(5, $db->query("SELECT id FROM {$db->quoteIdentifier('mygra_it_users2')} WHERE name = 'new'")[0]['id']);
 
     foreach ($schemas as $schema) {
-      $this->assertTrue($executor->verify($schema)['match'], $schema->name);
+      $this->assertTrue($executor->verify($schema)->matches(), $schema->name);
     }
     $this->assertTrue($executor->dropOffsets());
   }
@@ -182,7 +182,7 @@ class RoundTripTest extends TestCase
     $db->execute("DROP TABLE IF EXISTS {$db->quoteIdentifier('mygra_offsets')}");
 
     $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
-    $sqlite->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, name TEXT)');
     $sqlite->execute("INSERT INTO posts VALUES (1, 'to /?p=2'), (2, 'ids=\"1,9\"')");
 
     $schema = SchemaConfig::fromArray('posts', [
@@ -200,9 +200,9 @@ class RoundTripTest extends TestCase
     // Shifted by 1; dead 9 replaced by 0
     $this->assertEquals(
       [['id' => 2, 'name' => 'to /?p=3'], ['id' => 3, 'name' => 'ids="2,0"']],
-      $db->query("SELECT id, name FROM {$table} WHERE id > 1 ORDER BY id")
+      $db->query("SELECT id, name FROM {$table} WHERE id > 1 ORDER BY id"),
     );
-    $this->assertTrue($executor->verify($schema)['match']);
+    $this->assertTrue($executor->verify($schema)->matches());
     $executor->dropOffsets();
   }
 
@@ -213,7 +213,7 @@ class RoundTripTest extends TestCase
     $table = $db->quoteIdentifier('mygra_it_up');
 
     $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
-    $sqlite->execute("CREATE TABLE src (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute('CREATE TABLE src (id INTEGER PRIMARY KEY, name TEXT)');
     $sqlite->execute("INSERT INTO src VALUES (1, 'a'), (2, 'b')");
     $schema = ['source_table' => 'src', 'target_table' => 'mygra_it_up', 'fields' => ['id' => 'id', 'name' => 'name']];
     $this->migrate($sqlite, $db, $schema);
@@ -226,7 +226,7 @@ class RoundTripTest extends TestCase
     $this->assertSame(3, $result->getInsertedRows());
     $this->assertEquals(
       [['id' => 1, 'name' => 'a2'], ['id' => 2, 'name' => 'b'], ['id' => 3, 'name' => 'c']],
-      $db->query("SELECT id, name FROM {$table} ORDER BY id")
+      $db->query("SELECT id, name FROM {$table} ORDER BY id"),
     );
 
     // Only key columns: existing rows are left alone, new ones inserted
@@ -242,14 +242,14 @@ class RoundTripTest extends TestCase
       $this->markTestSkipped("{$envVar} not set");
     }
     $db = AdapterFactory::create($config);
-    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_uposts'));
-    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_uusers'));
+    $db->execute('DROP TABLE IF EXISTS ' . $db->quoteIdentifier('mygra_it_uposts'));
+    $db->execute('DROP TABLE IF EXISTS ' . $db->quoteIdentifier('mygra_it_uusers'));
 
     $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
-    $sqlite->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
     $sqlite->execute("INSERT INTO users VALUES (1, 'ada'), (2, 'bo')");
-    $sqlite->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT)");
-    $sqlite->execute("INSERT INTO posts VALUES (10, 2), (11, 1)");
+    $sqlite->execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT)');
+    $sqlite->execute('INSERT INTO posts VALUES (10, 2), (11, 1)');
 
     $schemas = [
       'users' => SchemaConfig::fromArray('users', [
@@ -271,11 +271,48 @@ class RoundTripTest extends TestCase
 
     $this->assertEquals(
       [['name' => 'bo'], ['name' => 'ada']],
-      $db->query("SELECT u.name FROM {$db->quoteIdentifier('mygra_it_uposts')} p JOIN {$db->quoteIdentifier('mygra_it_uusers')} u ON u.id = p.author_id ORDER BY u.name DESC")
+      $db->query("SELECT u.name FROM {$db->quoteIdentifier('mygra_it_uposts')} p JOIN {$db->quoteIdentifier('mygra_it_uusers')} u ON u.id = p.author_id ORDER BY u.name DESC"),
     );
     foreach ($schemas as $schema) {
-      $this->assertTrue($executor->verify($schema)['match'], $schema->name);
+      $this->assertTrue($executor->verify($schema)->matches(), $schema->name);
     }
+  }
+
+  #[DataProvider('databases')]
+  public function testDatabaseAsSourceWithSelfReferenceAcrossPages(string $envVar)
+  {
+    $config = json_decode((string) getenv($envVar), true);
+    if (!$config) {
+      $this->markTestSkipped("{$envVar} not set");
+    }
+    $db = AdapterFactory::create($config);
+    $table = $db->quoteIdentifier('mygra_it_cats');
+    $db->execute("DROP TABLE IF EXISTS {$table}");
+    $db->execute("CREATE TABLE {$table} (id INT PRIMARY KEY, parent_id INT, name VARCHAR(20))");
+    $db->execute("INSERT INTO {$table} VALUES (1, NULL, 'root'), (2, 1, 'a'), (3, 2, 'b'), (4, 3, 'c'), (5, 99, 'orphan')");
+
+    // The target already has a category, so IDs shift by 1
+    $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
+    $sqlite->execute('CREATE TABLE cats (id INTEGER PRIMARY KEY, parent_id INT, name TEXT)');
+    $sqlite->execute("INSERT INTO cats VALUES (1, NULL, 'existing')");
+
+    $schema = SchemaConfig::fromArray('cats', [
+      'source_table' => 'mygra_it_cats', 'target_table' => 'cats',
+      'fields' => ['id' => 'id', 'parent_id' => 'parent_id', 'name' => 'name'],
+      'references' => ['parent_id' => ['schema' => 'cats', 'on_missing' => 'null']],
+      'options' => ['remap_ids' => true],
+    ]);
+    // Pages of 2 rows: parent lookups run on the source connection between pages
+    $executor = (new MigrationExecutor($db, $sqlite))->setSchemas([$schema])->setBatchSize(2);
+    $result = $executor->execute($schema);
+
+    $this->assertTrue($result->isSuccess(), (string) $result->getError());
+    $this->assertSame(5, $result->getTotalRows());
+    $this->assertEquals(
+      [['id' => 2, 'parent_id' => null, 'name' => 'root'], ['id' => 3, 'parent_id' => 2, 'name' => 'a'], ['id' => 4, 'parent_id' => 3, 'name' => 'b'], ['id' => 5, 'parent_id' => 4, 'name' => 'c'], ['id' => 6, 'parent_id' => null, 'name' => 'orphan']],
+      $sqlite->query('SELECT id, parent_id, name FROM cats WHERE id > 1 ORDER BY id'),
+    );
+    $this->assertTrue($executor->verify($schema)->matches());
   }
 
   /**
@@ -311,8 +348,8 @@ class RoundTripTest extends TestCase
     // 1000 rows x 70 columns = 70,000 parameters: over MySQL's and PostgreSQL's 65,535, SQL Server's 2,100
     $db = AdapterFactory::create($config);
     $columns = array_map(fn($i) => "c{$i}", range(0, 69));
-    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_wide'));
-    $db->execute("CREATE TABLE mygra_it_wide (" . implode(', ', array_map(fn($c) => "{$c} INT", $columns)) . ")");
+    $db->execute('DROP TABLE IF EXISTS ' . $db->quoteIdentifier('mygra_it_wide'));
+    $db->execute('CREATE TABLE mygra_it_wide (' . implode(', ', array_map(fn($c) => "{$c} INT", $columns)) . ')');
 
     $rows = array_map(fn($r) => array_fill_keys($columns, $r), range(1, 1000));
     $db->batchInsert('mygra_it_wide', $columns, $rows);
@@ -329,11 +366,11 @@ class RoundTripTest extends TestCase
     }
 
     $db = AdapterFactory::create($config);
-    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_posts'));
-    $db->execute("DROP TABLE IF EXISTS " . $db->quoteIdentifier('mygra_it_authors'));
-    $db->execute("CREATE TABLE mygra_it_authors (id INT PRIMARY KEY)");
+    $db->execute('DROP TABLE IF EXISTS ' . $db->quoteIdentifier('mygra_it_posts'));
+    $db->execute('DROP TABLE IF EXISTS ' . $db->quoteIdentifier('mygra_it_authors'));
+    $db->execute('CREATE TABLE mygra_it_authors (id INT PRIMARY KEY)');
     // Table-level FOREIGN KEY: MySQL silently ignores inline column REFERENCES
-    $db->execute("CREATE TABLE mygra_it_posts (id INT PRIMARY KEY, author_id INT, FOREIGN KEY (author_id) REFERENCES mygra_it_authors(id))");
+    $db->execute('CREATE TABLE mygra_it_posts (id INT PRIMARY KEY, author_id INT, FOREIGN KEY (author_id) REFERENCES mygra_it_authors(id))');
 
     $schema = fn($table) => SchemaConfig::fromArray($table, ['source_table' => $table, 'target_table' => $table]);
     [$ordered] = SchemaOrder::sort([$schema('mygra_it_posts'), $schema('mygra_it_authors')], $db);

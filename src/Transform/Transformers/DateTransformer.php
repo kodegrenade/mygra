@@ -8,7 +8,7 @@ use Mygra\Transform\TransformerInterface;
 
 /**
  * Date Transformer
- * 
+ *
  * Transforms date/datetime values between formats.
  * Supports Unix timestamps, various date string formats, and timezone conversion.
  */
@@ -19,14 +19,9 @@ class DateTransformer implements TransformerInterface
     return 'date';
   }
 
-  public function getDescription(): string
+  public function getOptionNames(): array
   {
-    return 'Transform date/datetime values between formats';
-  }
-
-  public function supports(string $type): bool
-  {
-    return in_array(strtolower($type), ['date', 'datetime', 'timestamp', 'time']);
+    return ['input_format', 'output_format', 'input_timezone', 'output_timezone', 'default', 'on_error'];
   }
 
   public function transform(mixed $value, array $context = []): mixed

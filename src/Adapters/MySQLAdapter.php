@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * MySQL Database Adapter
- * 
+ *
  * Full-featured MySQL/MariaDB adapter with schema introspection,
  * transaction support, and streaming capabilities.
  */
@@ -48,7 +48,7 @@ class MySQLAdapter extends AbstractAdapter
       $dsn,
       $config['user'] ?? 'root',
       $config['password'] ?? '',
-      $options
+      $options,
     );
 
     // Set SQL mode (relaxed to support legacy zero dates)
@@ -67,7 +67,7 @@ class MySQLAdapter extends AbstractAdapter
   public function reserveIds(string $table, int $next): void
   {
     // InnoDB never sets the counter below MAX(id) + 1, so this cannot move it backwards past used IDs
-    $this->getPdo()->exec("ALTER TABLE {$this->quoteIdentifier($table)} AUTO_INCREMENT = {$next}");
+    $this->getPdo()->exec("ALTER TABLE {$this->quoteTable($table)} AUTO_INCREMENT = {$next}");
   }
 
   /**
@@ -83,7 +83,7 @@ class MySQLAdapter extends AbstractAdapter
   /**
    * Enable unbuffered queries for streaming large datasets.
    */
-  public function enableUnbufferedQueries(): void
+  private function enableUnbufferedQueries(): void
   {
     $this->pdo->setAttribute(self::bufferedQueryAttr(), false);
   }
@@ -91,7 +91,7 @@ class MySQLAdapter extends AbstractAdapter
   /**
    * Disable unbuffered queries (return to default behavior).
    */
-  public function disableUnbufferedQueries(): void
+  private function disableUnbufferedQueries(): void
   {
     $this->pdo->setAttribute(self::bufferedQueryAttr(), true);
   }
@@ -124,7 +124,7 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.TABLES 
              WHERE TABLE_SCHEMA = DATABASE() 
              AND TABLE_TYPE = 'BASE TABLE'
-             ORDER BY TABLE_NAME"
+             ORDER BY TABLE_NAME",
     );
 
     return array_column($result, 'TABLE_NAME');
@@ -136,10 +136,10 @@ class MySQLAdapter extends AbstractAdapter
     return $this->buildTableSchema($table, $columnsData);
   }
 
-  public function getColumns(string $table): array
+  protected function getColumns(string $table): array
   {
     return $this->query(
-      "SELECT 
+      'SELECT 
                 COLUMN_NAME,
                 DATA_TYPE,
                 COLUMN_TYPE,
@@ -154,8 +154,8 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.COLUMNS 
              WHERE TABLE_SCHEMA = DATABASE() 
              AND TABLE_NAME = ?
-             ORDER BY ORDINAL_POSITION",
-      [$table]
+             ORDER BY ORDINAL_POSITION',
+      [$table],
     );
   }
 
@@ -168,7 +168,7 @@ class MySQLAdapter extends AbstractAdapter
              AND TABLE_NAME = ?
              AND CONSTRAINT_NAME = 'PRIMARY'
              ORDER BY ORDINAL_POSITION",
-      [$table]
+      [$table],
     );
 
     if (empty($result)) {
@@ -182,7 +182,7 @@ class MySQLAdapter extends AbstractAdapter
   public function getForeignKeys(string $table): array
   {
     $result = $this->query(
-      "SELECT 
+      'SELECT 
                 CONSTRAINT_NAME,
                 COLUMN_NAME,
                 REFERENCED_TABLE_NAME,
@@ -190,8 +190,8 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
              WHERE TABLE_SCHEMA = DATABASE()
              AND TABLE_NAME = ?
-             AND REFERENCED_TABLE_NAME IS NOT NULL",
-      [$table]
+             AND REFERENCED_TABLE_NAME IS NOT NULL',
+      [$table],
     );
 
     $foreignKeys = [];
@@ -207,10 +207,10 @@ class MySQLAdapter extends AbstractAdapter
     return $foreignKeys;
   }
 
-  public function getIndexes(string $table): array
+  protected function getIndexes(string $table): array
   {
     $result = $this->query(
-      "SELECT 
+      'SELECT 
                 INDEX_NAME,
                 COLUMN_NAME,
                 NON_UNIQUE,
@@ -218,8 +218,8 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.STATISTICS
              WHERE TABLE_SCHEMA = DATABASE()
              AND TABLE_NAME = ?
-             ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-      [$table]
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+      [$table],
     );
 
     // Group by index name
@@ -251,28 +251,6 @@ class MySQLAdapter extends AbstractAdapter
     return '`' . $identifier . '`';
   }
 
-  public function getPlaceholderStyle(): string
-  {
-    return 'positional'; // MySQL uses ? placeholders
-  }
-
-  /**
-   * Get the current database name.
-   */
-  public function getCurrentDatabase(): string
-  {
-    $result = $this->query("SELECT DATABASE() as db");
-    return $result[0]['db'] ?? '';
-  }
-
-  /**
-   * Get MySQL server version.
-   */
-  public function getServerVersion(): string
-  {
-    return $this->getPdo()->getAttribute(\PDO::ATTR_SERVER_VERSION);
-  }
-
   // =========================================================================
   // Helper Methods
   // =========================================================================
@@ -300,7 +278,7 @@ class MySQLAdapter extends AbstractAdapter
       isAutoIncrement: str_contains(strtolower($extra), 'auto_increment'),
       isUnique: ($columnData['COLUMN_KEY'] ?? '') === 'UNI',
       comment: $columnData['COLUMN_COMMENT'] ?? null,
-      extra: ['mysql_extra' => $extra]
+      extra: ['mysql_extra' => $extra],
     );
   }
 

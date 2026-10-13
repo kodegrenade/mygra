@@ -6,18 +6,17 @@ namespace Mygra\Migration;
 
 /**
  * Migration Result
- * 
+ *
  * Contains the results of a migration execution.
  */
 class MigrationResult
 {
+  public const MAX_KEPT_ERRORS = 100;
+
   private string $schemaName;
   private bool $success = false;
   private int $totalRows = 0;
-  private int $processedRows = 0;
   private int $insertedRows = 0;
-  private int $updatedRows = 0;
-  private int $skippedRows = 0;
   private int $errorCount = 0;
   private float $duration = 0.0;
   private ?string $error = null;
@@ -41,24 +40,9 @@ class MigrationResult
     $this->totalRows = $total;
   }
 
-  public function setProcessedRows(int $processed): void
-  {
-    $this->processedRows = $processed;
-  }
-
   public function setInsertedRows(int $inserted): void
   {
     $this->insertedRows = $inserted;
-  }
-
-  public function setUpdatedRows(int $updated): void
-  {
-    $this->updatedRows = $updated;
-  }
-
-  public function setSkippedRows(int $skipped): void
-  {
-    $this->skippedRows = $skipped;
   }
 
   public function setErrorCount(int $count): void
@@ -76,9 +60,15 @@ class MigrationResult
     $this->error = $error;
   }
 
+  /**
+   * Keeps the first MAX_KEPT_ERRORS with their rows; the error count stays exact and every error
+   * is in the log, so a run with millions of bad rows does not hold them all in memory.
+   */
   public function addError(array $error): void
   {
-    $this->errors[] = $error;
+    if (count($this->errors) < self::MAX_KEPT_ERRORS) {
+      $this->errors[] = $error;
+    }
   }
 
   public function addWarning(string $warning): void
@@ -107,24 +97,9 @@ class MigrationResult
     return $this->totalRows;
   }
 
-  public function getProcessedRows(): int
-  {
-    return $this->processedRows;
-  }
-
   public function getInsertedRows(): int
   {
     return $this->insertedRows;
-  }
-
-  public function getUpdatedRows(): int
-  {
-    return $this->updatedRows;
-  }
-
-  public function getSkippedRows(): int
-  {
-    return $this->skippedRows;
   }
 
   public function getErrorCount(): int
@@ -135,19 +110,6 @@ class MigrationResult
   public function getDuration(): float
   {
     return $this->duration;
-  }
-
-  public function getFormattedDuration(): string
-  {
-    if ($this->duration < 1) {
-      return round($this->duration * 1000) . 'ms';
-    }
-    if ($this->duration < 60) {
-      return round($this->duration, 2) . 's';
-    }
-    $minutes = floor($this->duration / 60);
-    $seconds = $this->duration % 60;
-    return "{$minutes}m " . round($seconds) . 's';
   }
 
   public function getError(): ?string
@@ -171,73 +133,5 @@ class MigrationResult
       return $this->metadata;
     }
     return $this->metadata[$key] ?? null;
-  }
-
-  /**
-   * Get rows processed per second.
-   */
-  public function getRowsPerSecond(): float
-  {
-    if ($this->duration <= 0) {
-      return 0;
-    }
-    return $this->processedRows / $this->duration;
-  }
-
-  /**
-   * Get completion percentage.
-   */
-  public function getProgressPercent(): float
-  {
-    if ($this->totalRows <= 0) {
-      return 0;
-    }
-    return ($this->processedRows / $this->totalRows) * 100;
-  }
-
-  /**
-   * Convert to array.
-   */
-  public function toArray(): array
-  {
-    return [
-      'schema' => $this->schemaName,
-      'success' => $this->success,
-      'total_rows' => $this->totalRows,
-      'processed_rows' => $this->processedRows,
-      'inserted_rows' => $this->insertedRows,
-      'updated_rows' => $this->updatedRows,
-      'skipped_rows' => $this->skippedRows,
-      'error_count' => $this->errorCount,
-      'duration' => $this->duration,
-      'formatted_duration' => $this->getFormattedDuration(),
-      'rows_per_second' => round($this->getRowsPerSecond(), 2),
-      'error' => $this->error,
-      'errors' => $this->errors,
-      'warnings' => $this->warnings,
-      'metadata' => $this->metadata,
-    ];
-  }
-
-  /**
-   * Create a summary string.
-   */
-  public function getSummary(): string
-  {
-    $status = match (true) {
-      !$this->success => '✗ Failed',
-      $this->errorCount > 0 => '⚠ Completed with errors',
-      default => '✓ Success',
-    };
-
-    return sprintf(
-      "%s | Processed: %d/%d | Inserted: %d | Errors: %d | Duration: %s",
-      $status,
-      $this->processedRows,
-      $this->totalRows,
-      $this->insertedRows,
-      $this->errorCount,
-      $this->getFormattedDuration()
-    );
   }
 }

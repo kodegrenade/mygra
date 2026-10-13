@@ -6,7 +6,7 @@ namespace Mygra\Config;
 
 /**
  * Schema Configuration
- * 
+ *
  * Represents the configuration for migrating a single table/entity.
  */
 class SchemaConfig
@@ -22,7 +22,7 @@ class SchemaConfig
     public readonly array $joins = [],
     public readonly array $options = [],
     /** @var array<string, array{column: string, schema: string, on_missing: string, pattern: ?string, replacement: ?string}> name => parent */
-    public readonly array $references = []
+    public readonly array $references = [],
   ) {}
 
   /**
@@ -32,15 +32,15 @@ class SchemaConfig
   {
     return new self(
       name: $name,
-      sourceTable: $config['source_table'] ?? $config['source'] ?? '',
-      targetTable: $config['target_table'] ?? $config['target'] ?? '',
+      sourceTable: $config['source_table'] ?? '',
+      targetTable: $config['target_table'] ?? '',
       fields: $config['fields'] ?? [],
       transforms: $config['transforms'] ?? [],
       validations: $config['validations'] ?? [],
       where: $config['where'] ?? null,
-      joins: self::normalizeJoins($config['joins'] ?? $config['join'] ?? []),
+      joins: self::normalizeJoins($config['joins'] ?? []),
       options: $config['options'] ?? [],
-      references: self::normalizeReferences($config['references'] ?? [])
+      references: self::normalizeReferences($config['references'] ?? []),
     );
   }
 
@@ -53,86 +53,11 @@ class SchemaConfig
   }
 
   /**
-   * Get target field names.
-   */
-  public function getTargetFields(): array
-  {
-    return array_values($this->fields);
-  }
-
-  /**
-   * Get the target field name for a source field.
-   */
-  public function mapField(string $sourceField): ?string
-  {
-    return $this->fields[$sourceField] ?? null;
-  }
-
-  /**
-   * Check if a field has transformations.
-   */
-  public function hasTransform(string $field): bool
-  {
-    return isset($this->transforms[$field]);
-  }
-
-  /**
-   * Get transformations for a field.
-   */
-  public function getTransforms(string $field): array
-  {
-    return $this->transforms[$field] ?? [];
-  }
-
-  /**
-   * Check if a field has validations.
-   */
-  public function hasValidation(string $field): bool
-  {
-    return isset($this->validations[$field]);
-  }
-
-  /**
-   * Get validations for a field.
-   */
-  public function getValidations(string $field): array
-  {
-    return $this->validations[$field] ?? [];
-  }
-
-  /**
    * Get an option value.
    */
   public function getOption(string $key, mixed $default = null): mixed
   {
     return $this->options[$key] ?? $default;
-  }
-
-  /**
-   * Check if this schema has joins.
-   */
-  public function hasJoins(): bool
-  {
-    return !empty($this->joins);
-  }
-
-  /**
-   * Convert to array.
-   */
-  public function toArray(): array
-  {
-    return [
-      'name' => $this->name,
-      'source_table' => $this->sourceTable,
-      'target_table' => $this->targetTable,
-      'fields' => $this->fields,
-      'transforms' => $this->transforms,
-      'validations' => $this->validations,
-      'where' => $this->where,
-      'joins' => $this->joins,
-      'options' => $this->options,
-      'references' => $this->references,
-    ];
   }
 
   /**
@@ -148,24 +73,11 @@ class SchemaConfig
     $normalized = [];
     foreach ($references as $column => $ref) {
       $ref = is_string($ref) ? ['schema' => $ref] : $ref;
+      foreach (self::referenceProblems($ref) as $key => $problem) {
+        throw new \InvalidArgumentException("references.{$column}.{$key}: {$problem}");
+      }
       $pattern = $ref['pattern'] ?? null;
-      $onMissing = $ref['on_missing'] ?? 'error';
-
-      if ($pattern !== null) {
-        // preg_match_all fills one array per group even without a match, so this also counts groups
-        if (@preg_match_all($pattern, '', $groups) === false || count($groups) < 2) {
-          throw new \InvalidArgumentException("references.{$column}.pattern must be a valid regex with a capture group, got '{$pattern}'");
-        }
-        // NULL would wipe the whole text; replace swaps only the dead ID for one that matches nothing
-        $allowed = ['error', 'replace'];
-      } else {
-        $allowed = ['error', 'null'];
-      }
-      if (!in_array($onMissing, $allowed, true)) {
-        throw new \InvalidArgumentException(
-          "references.{$column}.on_missing must be " . implode(' or ', $allowed) . ", got '{$onMissing}'"
-        );
-      }
+      $onMissing = self::onMissing($ref);
 
       $normalized[$column] = [
         'column' => $ref['column'] ?? $column,
@@ -176,6 +88,43 @@ class SchemaConfig
       ];
     }
     return $normalized;
+  }
+
+  /**
+   * Problems in one reference's pattern and on_missing, as key => message (shared with ConfigValidator).
+   *
+   * @return array<string, string>
+   */
+  public static function referenceProblems(array $ref): array
+  {
+    $problems = [];
+    $pattern = $ref['pattern'] ?? null;
+    $onMissing = self::onMissing($ref);
+
+    if ($pattern !== null) {
+      // preg_match_all fills one array per group even without a match, so this also counts groups
+      if (!is_string($pattern) || @preg_match_all($pattern, '', $groups) === false || count($groups) < 2) {
+        $problems['pattern'] = 'must be a valid regex with a capture group, got ' . var_export($pattern, true);
+      }
+      // NULL would wipe the whole text; replace swaps only the dead ID for one that matches nothing
+      $allowed = ['error', 'replace'];
+    } else {
+      $allowed = ['error', 'null'];
+    }
+    if (!in_array($onMissing, $allowed, true)) {
+      $problems['on_missing'] = 'must be ' . implode(' or ', $allowed) . ($pattern !== null ? ' with a pattern' : '')
+        . ', got ' . var_export($onMissing, true);
+    }
+
+    return $problems;
+  }
+
+  /**
+   * on_missing, defaulting to error; a bare YAML `on_missing: null` parses to PHP null and means 'null'.
+   */
+  private static function onMissing(array $ref): mixed
+  {
+    return array_key_exists('on_missing', $ref) ? ($ref['on_missing'] ?? 'null') : 'error';
   }
 
   /**
@@ -193,7 +142,7 @@ class SchemaConfig
       }
 
       if (!isset($join['table'])) {
-        continue;
+        throw new \InvalidArgumentException("joins.{$key}.table: required");
       }
 
       $normalized[] = [

@@ -19,11 +19,16 @@ class EmailValidator implements ValidatorInterface
 
   public function getMessage(): string
   {
-    return "Invalid email format";
+    return 'Invalid email format';
   }
 
   public function getName(): string
   {
     return 'email';
+  }
+
+  public function getOptionNames(): array
+  {
+    return [];
   }
 }

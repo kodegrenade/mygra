@@ -8,24 +8,21 @@ use Mygra\Transform\TransformerInterface;
 
 /**
  * JSON Transformer
- * 
+ *
  * Encodes/decodes JSON values for storage/retrieval.
  */
 class JsonTransformer implements TransformerInterface
 {
+  public const MODES = ['encode', 'decode', 'pretty'];
+
   public function getName(): string
   {
     return 'json';
   }
 
-  public function getDescription(): string
+  public function getOptionNames(): array
   {
-    return 'Encode or decode JSON values';
-  }
-
-  public function supports(string $type): bool
-  {
-    return in_array(strtolower($type), ['json', 'jsonb', 'array', 'object']);
+    return ['mode', 'assoc', 'depth', 'flags', 'null_value'];
   }
 
   public function transform(mixed $value, array $context = []): mixed
@@ -43,7 +40,7 @@ class JsonTransformer implements TransformerInterface
       'encode' => $this->encode($value, $flags, $depth),
       'decode' => $this->decode($value, $assoc, $depth),
       'pretty' => $this->encode($value, $flags | JSON_PRETTY_PRINT, $depth),
-      default => $value,
+      default => throw new \InvalidArgumentException("Unknown json mode '{$mode}'; use one of: " . implode(', ', self::MODES)),
     };
   }
 

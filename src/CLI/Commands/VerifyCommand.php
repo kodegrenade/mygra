@@ -4,107 +4,131 @@ declare(strict_types=1);
 
 namespace Mygra\CLI\Commands;
 
+use Mygra\CLI\Ui;
+use Mygra\Migration\MigrationExecutor;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Console\Style\SymfonyStyle;
-use Mygra\Adapters\AdapterFactory;
-use Mygra\Config\ConfigLoader;
-use Mygra\Migration\MigrationExecutor;
 
 /**
- * Verify Command
- *
  * Checks that the target holds what a migration should have written:
  * row counts plus a checksum of the mapped columns.
  */
-#[AsCommand(
-  name: 'verify',
-  description: 'Verify migrated data: row counts and checksums, source vs target'
-)]
-class VerifyCommand extends Command
+#[AsCommand(name: 'verify', description: 'Check that the target holds exactly what the migration should have written')]
+class VerifyCommand extends MygraCommand
 {
   protected function configure(): void
   {
     $this
-      ->addOption('config', 'c', InputOption::VALUE_REQUIRED, 'Path to configuration file', 'config/mygra.yaml')
-      ->addOption('schema', 's', InputOption::VALUE_REQUIRED, 'Specific schema to verify (omit for all)')
-      ->setHelp(
-        <<<HELP
-The <info>verify</info> command compares source and target after a migration.
+      ->addConfigOption()
+      ->addOption('schema', 's', InputOption::VALUE_REQUIRED, 'Verify only this schema')
+      ->addFormatOption()
+      ->setHelp(<<<HELP
+        Reads the source through the same query, transforms, validations and ID mapping as
+        <info>migrate</info>, and compares it with the target: row counts and a checksum of every
+        mapped column. Rows that fail validation are reported as invalid, not expected in the target.
 
-Source rows go through the schema's query, transforms and validation, exactly as in
-<info>migrate</info>; rows that fail validation are reported as invalid and not expected
-in the target. Counts and an order-independent checksum of the mapped columns are compared.
-
-Transforms that are not deterministic (e.g. salted hashes) always produce a checksum mismatch.
-HELP
-      );
+        Salted hashes (bcrypt, argon2) differ on every run and always show a checksum mismatch.
+        Exits with 0 only when every schema matches.
+        HELP);
   }
 
   protected function execute(InputInterface $input, OutputInterface $output): int
   {
-    $io = new SymfonyStyle($input, $output);
-    $io->title('Mygra Verification');
+    $run = $this->verifyAll($input, $output, 'Verifying');
+    if (is_int($run)) {
+      return $run;
+    }
+    [, $report, $allMatch] = $run;
+
+    if ($this->wantsJson($input)) {
+      $this->writeJson($output, ['status' => $allMatch ? 'ok' : 'mismatch', 'schemas' => $report]);
+    } elseif ($allMatch) {
+      $this->ui->done('The target matches the source.');
+    } else {
+      $this->ui->error($this->mismatchSummary($report));
+    }
+
+    return $allMatch ? Command::SUCCESS : Command::FAILURE;
+  }
+
+  /**
+   * Verify every schema (or --schema), rendering one line each unless the output is JSON.
+   *
+   * @return int|array{0: MigrationExecutor, 1: array<string, array>, 2: bool} An exit code on failure,
+   *   else [executor, report per schema, whether all match]
+   */
+  protected function verifyAll(InputInterface $input, OutputInterface $output, string $verb): int|array
+  {
+    $json = $this->wantsJson($input);
 
     try {
-      $config = ConfigLoader::load($input->getOption('config'));
-      $executor = (new MigrationExecutor(
-        AdapterFactory::create($config->getSourceConnection()),
-        AdapterFactory::create($config->getTargetConnection())
-      ))->setSchemas($config->getAllSchemas());
+      $config = $this->loadConfig($input);
+      $executor = (new MigrationExecutor($this->connect($config, 'source'), $this->connect($config, 'target')))
+        ->setSchemas($config->getAllSchemas());
     } catch (\Exception $e) {
-      $io->error($e->getMessage());
-      return Command::FAILURE;
+      return $this->fail($input, $output, $e->getMessage());
     }
 
-    $schemaName = $input->getOption('schema');
-    $schemas = $schemaName ? [$config->getSchema($schemaName)] : array_values($config->getAllSchemas());
-    if (empty($schemas) || $schemas[0] === null) {
-      $io->error($schemaName ? "Schema not found: {$schemaName}" : "No schemas defined in configuration");
-      return Command::FAILURE;
+    $schemaName = $input->hasOption('schema') ? $input->getOption('schema') : null;
+    $schemas = $schemaName ? array_filter([$config->getSchema($schemaName)]) : array_values($config->getAllSchemas());
+    if (!$schemas) {
+      return $this->fail($input, $output, $schemaName ? "Schema not found: {$schemaName}" : 'No schemas defined in the configuration');
     }
 
-    $rows = [];
-    $allMatch = true;
+    if (!$json) {
+      $this->ui->info(sprintf(
+        '%s %s · %s → %s',
+        $verb,
+        Ui::count(count($schemas), 'schema'),
+        Ui::connection($config->getSourceConnection()),
+        Ui::connection($config->getTargetConnection()),
+      ));
+    }
 
+    $report = [];
     foreach ($schemas as $schema) {
       try {
-        $r = $executor->verify($schema);
-      } catch (\Exception $e) {
-        $rows[] = [$schema->name, '-', '-', '-', '-', '-', "<error>✗ {$e->getMessage()}</error>"];
-        $allMatch = false;
-        continue;
+        $r = $executor->verify($schema)->toArray();
+      } catch (\Throwable $e) {
+        $r = ['match' => false, 'error' => $e->getMessage()];
       }
+      $report[$schema->name] = $r;
 
-      $allMatch = $allMatch && $r['match'];
-      $rows[] = [
-        $schema->name,
-        $r['source_rows'],
-        $r['invalid_rows'],
-        $r['expected_rows'],
-        $r['target_rows'],
-        $r['checksum_match'] ? 'match' : '<error>differs</error>',
-        $r['match'] ? '<info>✓</info>' : '<error>✗</error>',
-      ];
+      if (!$json) {
+        $this->renderSchema($schema->name, $r);
+      }
     }
 
-    $io->table(['Schema', 'Source', 'Invalid', 'Expected', 'Target', 'Checksum', 'Status'], $rows);
+    return [$executor, $report, !in_array(false, array_column($report, 'match'), true)];
+  }
 
-    if (!$allMatch) {
-      $io->error('Target does not match the source.');
-      return Command::FAILURE;
+  protected function mismatchSummary(array $report): string
+  {
+    $mismatched = count(array_filter($report, fn($r) => !$r['match']));
+    return Ui::count($mismatched, 'schema') . ' do' . ($mismatched === 1 ? 'es' : '') . ' not match the source.';
+  }
+
+  private function renderSchema(string $name, array $r): void
+  {
+    if (isset($r['error'])) {
+      $this->ui->task($name, 'could not verify', 'fail');
+      $this->ui->detail("<fg=red>{$r['error']}</>", false);
+      return;
     }
 
-    // ID offsets are only needed until the data is confirmed; children's checks need their parents',
-    // so remove them only after a full run over every schema
-    if (!$schemaName && $executor->dropOffsets()) {
-      $io->text('Removed mygra_offsets: every schema verified.');
+    $this->ui->task($name, sprintf('%s of %s', Ui::count($r['target_rows'], 'row'), number_format($r['expected_rows'])), $r['match'] ? 'ok' : 'fail');
+    if ($r['invalid_rows'] > 0) {
+      $this->ui->detail(Ui::count($r['invalid_rows'], 'source row') . ' invalid, not expected in the target');
     }
-
-    $io->success('Target matches the source.');
-    return Command::SUCCESS;
+    if ($r['target_rows'] !== $r['expected_rows']) {
+      $diff = $r['expected_rows'] - $r['target_rows'];
+      $this->ui->detail('<fg=red>' . ($diff > 0 ? Ui::count($diff, 'row') . ' missing from' : Ui::count(-$diff, 'extra row') . ' in') . ' the target</>', false);
+    }
+    if (!$r['checksum_match']) {
+      $this->ui->detail('<fg=red>Values differ: the checksum of the mapped columns does not match</>', false);
+    }
   }
 }

@@ -16,7 +16,7 @@
 
 # Mygra
 
-Mygra moves data from one database to another — MySQL, PostgreSQL, SQLite and SQL Server, in any direction — driven by a configuration file instead of code. You describe which tables go where, how columns map, how values are cleaned and validated, and how rows relate to each other; Mygra streams the data across in batches, keeps relationships intact, and proves the result with `verify`.
+Mygra moves data from one database to another — MySQL, PostgreSQL, SQLite and SQL Server, in any direction — driven by a configuration file instead of code. You describe which tables go where, how columns map, how values are cleaned and validated, and how rows relate to each other; Mygra moves the data across in batches, keeps relationships intact, and proves the result with `verify`.
 
 It is built for real application migrations: merging into an app that already has data, giving rows new IDs (integers or UUIDs) while every reference follows, resuming after a failure, and doing a final sync just before cutover.
 
@@ -42,7 +42,8 @@ It is built for real application migrations: merging into an app that already ha
 - **Column mapping, joins and filters**: rename columns, pull columns in from joined tables, filter source rows with a `where` clause.
 - **Transforms and validations** per column: dates, booleans, casing, trimming, hashing, JSON and more; rows that fail validation are skipped or stop the run, your choice.
 - **Creates target tables** when missing, converting column types between databases.
-- **Streams in batches**, so table size is bounded by time, not memory. Wide tables are split to stay under each database's parameter limit.
+- **Reads in key order, page by page**, so table size is bounded by time, not memory, nothing stays open on a live source, and rows added or deleted mid-run cannot be skipped. Wide tables are split to stay under each database's parameter limit.
+- **Catches config mistakes before anything runs**: every key, option, transformer and validator name is checked when the config loads, with a "did you mean" for typos.
 - **Resumable**: each batch commits on its own; `--resume` continues after a failure. Or run a schema as one all-or-nothing transaction.
 - **Final sync** with `--upsert`: update rows that changed in the source, add new ones.
 - **Parents before children**: schemas are ordered by foreign keys or declared dependencies; if a parent fails, its children are skipped.
@@ -59,8 +60,10 @@ It is built for real application migrations: merging into an app that already ha
 git clone https://github.com/kodegrenade/mygra.git
 cd mygra
 composer install
-chmod +x mygra
+./mygra list        # or: php mygra list
 ```
+
+Inside a project: `composer require --dev kodegrenade/mygra`, then run `vendor/bin/mygra`.
 
 ## Quick start
 
@@ -71,6 +74,8 @@ php mygra compare --schema=users        # see how source and target tables diffe
 php mygra migrate --dry-run             # read and transform everything, write nothing
 php mygra migrate --create              # migrate, creating missing target tables
 php mygra verify                        # prove the target matches the source
+php mygra migrate --upsert              # final sync just before cutover
+php mygra finish                        # after cutover: verify once more, remove Mygra's bookkeeping
 ```
 
 ## Configuration
@@ -118,6 +123,14 @@ schemas:
 ```
 
 Values can read environment variables: `${NAME}`, or `${NAME:-default}` with a fallback.
+
+The whole file is checked when it loads, before any database is touched. Unknown keys, misspelled options, unknown transformers or validators and invalid values are all reported at once:
+
+```text
+   ERROR  Invalid configuration in config/mygra.yaml (2 problems):
+  - settings.on_error: 'abrot' is not allowed (did you mean abort?); use one of: skip, abort, rollback
+  - schemas.users.options.remap_id: unknown option (did you mean remap_ids?); allowed: create_target, on_error, ...
+```
 
 ### Connections
 
@@ -287,7 +300,8 @@ schemas:
 - Before loading, Mygra moves the table's auto-increment past its range, so an application that keeps running cannot take those IDs.
 - A reference with no matching row (a post by a deleted user) is a row error. `author_id: { schema: users, on_missing: null }` keeps the row with a NULL reference instead.
 - A schema can reference itself (`parent_id: categories`).
-- Offsets are stored in a `mygra_offsets` table in the target until a passing `verify` over all schemas removes it.
+- Offsets are stored in a `mygra_offsets` table in the target, so resume, `verify` and `--upsert` reruns keep using the same IDs. `mygra finish` removes it after cutover.
+- Source rows added after the first run extend the reserved range, but only into IDs that are still free; if the application has taken some of them meanwhile, the run stops instead of overwriting its rows.
 - Needs a single-column primary key in the source.
 
 ### UUID keys
@@ -322,12 +336,21 @@ php mygra verify            # all schemas
 php mygra verify -s users   # one schema
 ```
 
-`verify` reads the source through the same query, transforms, validations and ID mapping as `migrate`, and compares it with the target: row counts, and an order-independent checksum of every mapped column. Rows that fail validation are reported as invalid, not expected in the target. For schemas with `remap_ids`, rows the application already had in the table are left out of the comparison; without it, every target row counts. It exits non-zero on any mismatch.
+`verify` reads the source through the same query, transforms, validations and ID mapping as `migrate`, and compares it with the target: row counts, and an order-independent checksum of every mapped column. Rows that fail validation are reported as invalid, not expected in the target. For schemas with `remap_ids`, rows the application already had in the table are left out of the comparison; without it, every target row counts. It never changes the target, and exits non-zero on any mismatch.
 
 ```text
- Schema   Source   Invalid   Expected   Target   Checksum   Status
- users    3        1         2          2        match      ✓
+   INFO  Verifying 2 schemas · mysql 127.0.0.1/old_app → pgsql 127.0.0.1/new_app
+
+  posts .................................................... 2 rows of 2  FAIL
+    ⤷ Values differ: the checksum of the mapped columns does not match
+  users .................................................... 2 rows of 2  OK
+
+   ERROR  1 schema does not match the source.
 ```
+
+### Finishing a migration
+
+Once the application runs on the target and no more syncs are needed, run `mygra finish`. It verifies every schema once more and, only if all of them match, removes the `mygra_offsets` table. After that, `--resume` and `--upsert` can no longer reuse the same IDs, so finish last.
 
 ## Commands
 
@@ -336,23 +359,26 @@ Every command accepts `--config` / `-c`.
 | Command | What it does | Options |
 | --- | --- | --- |
 | `init` | Creates a configuration file with a wizard | `--output`, `--format` (yaml, json, php) |
-| `validate` | Checks the configuration and both connections | `--schema` |
+| `validate` | Checks the configuration, both connections and every table and field | `--schema` |
 | `inspect [table]` | Lists tables, or shows one table's columns, keys and indexes | `--connection` (source, target); or connect directly with `--driver`, `--host`, `--database`, `--user`, `--password` |
 | `compare` | Compares a schema's source and target tables | `--schema` |
 | `suggest <source_table> <target_table>` | Suggests field mappings by name similarity | `--threshold` (0.0–1.0) |
 | `migrate` | Migrates every schema in dependency order, or one | `--schema`, `--batch-size`, `--dry-run`, `--create`, `--resume`, `--upsert`, `--no-progress`, `--log-file` |
-| `verify` | Compares target with source | `--schema` |
+| `verify` | Compares target with source; never writes | `--schema` |
+| `finish` | After cutover: verifies everything, then removes `mygra_offsets` | — |
 
-`migrate` and `verify` exit with 0 only when everything succeeded: no failed schema, no skipped row, no mismatch.
+`migrate`, `verify` and `finish` exit with 0 only when everything succeeded: no failed schema, no skipped row, no mismatch.
+
+For CI, `migrate`, `verify`, `finish` and `validate` accept `--format=json`: one JSON document on stdout instead of the human-readable output, with per-schema status, row counts and the first row errors. Colour is turned off automatically when output is not a terminal, with `--no-ansi`, or when `NO_COLOR` is set.
 
 ## Limitations
 
-- **Primary keys**: resume and ID mapping need a single-column primary key in the source.
+- **Primary keys**: resume and ID mapping need a single-column primary key in the source. Tables with a composite key or none are read in a single pass instead of page by page; on SQL Server a table with no primary key at all cannot be read.
 - **Deleted rows**: `--upsert` adds and updates, but never deletes target rows whose source row was removed.
 - **Dependency cycles with ID mapping**: when two schemas with `remap_ids` reference each other (`users.current_team_id` and `teams.owner_id`), this is not supported yet: whichever runs first stops with "has no ID offset yet" rather than writing references it cannot map.
 - **Self-references and skipped rows**: if a row fails validation, rows of the same table that point at it keep pointing at an ID that never arrived.
 - **IDs inside JSON or PHP-serialized values** are not rewritten. A regex pattern can find IDs in serialized PHP, but rewriting them would corrupt it, because serialized strings record their own length.
-- **Random output**: `bcrypt` and `argon2` hashes differ on every run, so `verify` always reports a checksum mismatch for those columns — and, with `remap_ids`, never removes `mygra_offsets`.
+- **Random output**: `bcrypt` and `argon2` hashes differ on every run, so `verify` always reports a checksum mismatch for those columns, and `finish` will not remove `mygra_offsets`.
 - **Live SQLite targets**: Mygra does not reserve ID ranges on SQLite, so an application writing to it during a migration can collide with migrated IDs.
 - **Created tables** get columns and the primary key, but no foreign keys or other indexes.
 

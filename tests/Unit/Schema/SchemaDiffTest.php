@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Schema;
 
-use PHPUnit\Framework\TestCase;
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
 use Mygra\Schema\SchemaDiff;
+use Mygra\Schema\TableSchema;
+use PHPUnit\Framework\TestCase;
 
 class SchemaDiffTest extends TestCase
 {
@@ -15,11 +15,11 @@ class SchemaDiffTest extends TestCase
   {
     $source = new TableSchema('users', [
       'id' => new ColumnSchema('id', 'int'),
-      'name' => new ColumnSchema('name', 'string')
+      'name' => new ColumnSchema('name', 'string'),
     ]);
 
     $target = new TableSchema('users', [
-      'id' => new ColumnSchema('id', 'int')
+      'id' => new ColumnSchema('id', 'int'),
     ]);
 
     $diff = new SchemaDiff();
@@ -34,11 +34,11 @@ class SchemaDiffTest extends TestCase
   public function testDiffDetectsTypeMismatch()
   {
     $source = new TableSchema('users', [
-      'id' => new ColumnSchema('id', 'int')
+      'id' => new ColumnSchema('id', 'int'),
     ]);
 
     $target = new TableSchema('users', [
-      'id' => new ColumnSchema('id', 'string')
+      'id' => new ColumnSchema('id', 'string'),
     ]);
 
     $diff = new SchemaDiff();

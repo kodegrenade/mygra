@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Migration;
 
-use PHPUnit\Framework\TestCase;
 use Mygra\Adapters\SQLiteAdapter;
 use Mygra\Config\SchemaConfig;
 use Mygra\Migration\MigrationExecutor;
+use PHPUnit\Framework\TestCase;
 
 /**
  * IDs inside text (links, ID lists) follow their rows to new IDs.
@@ -21,13 +21,13 @@ class TextReferencesTest extends TestCase
   {
     $this->source = new SQLiteAdapter();
     $this->source->connect(['database' => ':memory:']);
-    $this->source->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, body TEXT)");
+    $this->source->execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, body TEXT)');
     $this->source->execute("INSERT INTO posts VALUES (1, 'Read /?p=2 next'), (2, 'Back to /?p=1, see ids=\"1, 2\"'), (3, 'Dead /?p=99 and /?p=1')");
 
     // The app already has post 1, so migrated posts shift by 1
     $this->target = new SQLiteAdapter();
     $this->target->connect(['database' => ':memory:']);
-    $this->target->execute("CREATE TABLE app_posts (id INTEGER PRIMARY KEY, body TEXT)");
+    $this->target->execute('CREATE TABLE app_posts (id INTEGER PRIMARY KEY, body TEXT)');
     $this->target->execute("INSERT INTO app_posts VALUES (1, 'existing')");
   }
 
@@ -49,7 +49,7 @@ class TextReferencesTest extends TestCase
 
   private function bodies(): array
   {
-    return array_column($this->target->query("SELECT body FROM app_posts WHERE id > 1 ORDER BY id"), 'body', null);
+    return array_column($this->target->query('SELECT body FROM app_posts WHERE id > 1 ORDER BY id'), 'body', null);
   }
 
   public function testDeadIdFailsItsRowByDefault()
@@ -69,7 +69,7 @@ class TextReferencesTest extends TestCase
     $this->assertSame(0, $result->getErrorCount());
     $this->assertSame(['Dead IDs inside text replaced: 1 (on_missing: replace)'], $result->getWarnings());
     $this->assertSame(['Read /?p=3 next', 'Back to /?p=2, see ids="2, 3"', 'Dead /?p=0 and /?p=2'], $this->bodies());
-    $this->assertTrue($executor->verify($schema)['match']);
+    $this->assertTrue($executor->verify($schema)->matches());
   }
 
   public function testReplacementThatCouldMatchARealRowIsRefused()

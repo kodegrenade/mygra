@@ -5,7 +5,7 @@ declare(strict_types=1);
 
 /**
  * Mygra CLI - Universal Database Migration Tool
- * 
+ *
  * Usage:
  *   php mygra migrate --config=config/mygra.yaml --schema=users
  *   php mygra inspect --connection=source users

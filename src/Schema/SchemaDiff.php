@@ -6,7 +6,7 @@ namespace Mygra\Schema;
 
 /**
  * Schema Diff
- * 
+ *
  * Compares two TableSchema objects and reports differences.
  */
 class SchemaDiff
@@ -15,7 +15,7 @@ class SchemaDiff
 
   /**
    * Compare source table with target table.
-   * 
+   *
    * @param TableSchema $source
    * @param TableSchema $target
    * @param array $fieldMappings Map of source_field => target_field
@@ -127,9 +127,9 @@ class SchemaDiff
   {
     $this->diffs[] = [
       'category' => $category,
-      'item' => (string)$item,
+      'item' => (string) $item,
       'type' => $type,
-      'message' => $message
+      'message' => $message,
     ];
   }
 }

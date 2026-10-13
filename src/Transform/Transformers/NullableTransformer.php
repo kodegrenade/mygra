@@ -8,7 +8,7 @@ use Mygra\Transform\TransformerInterface;
 
 /**
  * Nullable Transformer
- * 
+ *
  * Handles null value conversion and empty string handling.
  */
 class NullableTransformer implements TransformerInterface
@@ -18,14 +18,9 @@ class NullableTransformer implements TransformerInterface
     return 'nullable';
   }
 
-  public function getDescription(): string
+  public function getOptionNames(): array
   {
-    return 'Handle null values: convert empty strings, set defaults, etc.';
-  }
-
-  public function supports(string $type): bool
-  {
-    return true; // Applies to any type
+    return ['empty_as_null', 'null_values', 'default'];
   }
 
   public function transform(mixed $value, array $context = []): mixed

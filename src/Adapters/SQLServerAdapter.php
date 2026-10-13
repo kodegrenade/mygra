@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * SQL Server Database Adapter
- * 
+ *
  * Full-featured Microsoft SQL Server adapter with schema introspection,
  * transaction support with savepoints, and T-SQL compatibility.
  */
@@ -45,7 +45,7 @@ class SQLServerAdapter extends AbstractAdapter
       $dsn = "sqlsrv:Server={$host},{$port};Database={$database}";
       // ODBC Driver 18 encrypts by default and rejects self-signed certificates
       if (!empty($config['trust_server_certificate'])) {
-        $dsn .= ";TrustServerCertificate=1";
+        $dsn .= ';TrustServerCertificate=1';
       }
     } else {
       // FreeTDS/dblib for Linux/Mac
@@ -65,7 +65,7 @@ class SQLServerAdapter extends AbstractAdapter
       $dsn,
       $config['user'] ?? 'sa',
       $config['password'] ?? '',
-      $options
+      $options,
     );
   }
 
@@ -84,16 +84,8 @@ class SQLServerAdapter extends AbstractAdapter
     }
 
     throw new \RuntimeException(
-      'No SQL Server PDO driver available. Install sqlsrv (Windows) or dblib (Linux/Mac).'
+      'No SQL Server PDO driver available. Install sqlsrv (Windows) or dblib (Linux/Mac).',
     );
-  }
-
-  /**
-   * Set the active schema.
-   */
-  public function setSchema(string $schema): void
-  {
-    $this->schema = $schema;
   }
 
   // =========================================================================
@@ -108,7 +100,7 @@ class SQLServerAdapter extends AbstractAdapter
              WHERE TABLE_SCHEMA = ? 
              AND TABLE_TYPE = 'BASE TABLE'
              ORDER BY TABLE_NAME",
-      [$this->schema]
+      [$this->schema],
     );
 
     return array_column($result, 'TABLE_NAME');
@@ -120,7 +112,7 @@ class SQLServerAdapter extends AbstractAdapter
     return $this->buildTableSchema($table, $columnsData);
   }
 
-  public function getColumns(string $table): array
+  protected function getColumns(string $table): array
   {
     return $this->query(
       "SELECT 
@@ -146,7 +138,7 @@ class SQLServerAdapter extends AbstractAdapter
              WHERE c.TABLE_SCHEMA = ?
              AND c.TABLE_NAME = ?
              ORDER BY c.ORDINAL_POSITION",
-      [$this->schema . '.' . $table, $this->schema, $table, $this->schema, $table]
+      [$this->schema . '.' . $table, $this->schema, $table, $this->schema, $table],
     );
   }
 
@@ -161,7 +153,7 @@ class SQLServerAdapter extends AbstractAdapter
              AND tc.TABLE_NAME = ?
              AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
              ORDER BY ku.ORDINAL_POSITION",
-      [$this->schema, $table]
+      [$this->schema, $table],
     );
 
     if (empty($result)) {
@@ -175,7 +167,7 @@ class SQLServerAdapter extends AbstractAdapter
   public function getForeignKeys(string $table): array
   {
     $result = $this->query(
-      "SELECT 
+      'SELECT 
                 fk.name as CONSTRAINT_NAME,
                 cp.name as COLUMN_NAME,
                 OBJECT_NAME(fk.referenced_object_id) as REFERENCED_TABLE,
@@ -187,8 +179,8 @@ class SQLServerAdapter extends AbstractAdapter
              JOIN sys.columns cr ON fkc.referenced_object_id = cr.object_id 
                  AND fkc.referenced_column_id = cr.column_id
              WHERE OBJECT_SCHEMA_NAME(fk.parent_object_id) = ?
-             AND OBJECT_NAME(fk.parent_object_id) = ?",
-      [$this->schema, $table]
+             AND OBJECT_NAME(fk.parent_object_id) = ?',
+      [$this->schema, $table],
     );
 
     $foreignKeys = [];
@@ -204,10 +196,10 @@ class SQLServerAdapter extends AbstractAdapter
     return $foreignKeys;
   }
 
-  public function getIndexes(string $table): array
+  protected function getIndexes(string $table): array
   {
     $result = $this->query(
-      "SELECT 
+      'SELECT 
                 i.name as INDEX_NAME,
                 c.name as COLUMN_NAME,
                 i.is_unique as IS_UNIQUE,
@@ -218,8 +210,8 @@ class SQLServerAdapter extends AbstractAdapter
              WHERE OBJECT_SCHEMA_NAME(i.object_id) = ?
              AND OBJECT_NAME(i.object_id) = ?
              AND i.name IS NOT NULL
-             ORDER BY i.name, ic.key_ordinal",
-      [$this->schema, $table]
+             ORDER BY i.name, ic.key_ordinal',
+      [$this->schema, $table],
     );
 
     $indexes = [];
@@ -237,25 +229,6 @@ class SQLServerAdapter extends AbstractAdapter
     }
 
     return array_values($indexes);
-  }
-
-  // =========================================================================
-  // Transaction Support
-  // =========================================================================
-
-  public function savepoint(string $name): void
-  {
-    $this->execute("SAVE TRANSACTION {$name}");
-  }
-
-  public function rollbackToSavepoint(string $name): void
-  {
-    $this->execute("ROLLBACK TRANSACTION {$name}");
-  }
-
-  public function releaseSavepoint(string $name): void
-  {
-    // SQL Server doesn't have RELEASE SAVEPOINT - savepoints are released on commit
   }
 
   // =========================================================================
@@ -299,10 +272,10 @@ class SQLServerAdapter extends AbstractAdapter
    */
   private function withIdentityInsert(string $table, array $columns, callable $write): int
   {
-    $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $qualified = $this->quoteTable($table);
     $identity = $this->query(
-      "SELECT name FROM sys.identity_columns WHERE object_id = OBJECT_ID(?)",
-      [$qualified]
+      'SELECT name FROM sys.identity_columns WHERE object_id = OBJECT_ID(?)',
+      [$qualified],
     );
     $identityInsert = !empty($identity) && in_array($identity[0]['name'], $columns, true);
     if ($identityInsert) {
@@ -332,7 +305,7 @@ class SQLServerAdapter extends AbstractAdapter
     // Ensure the query has an ORDER BY for consistent paging
     if (stripos($sql, 'ORDER BY') === false) {
       throw new \RuntimeException(
-        'Streaming queries in SQL Server require an ORDER BY clause for consistent results.'
+        'Streaming queries in SQL Server require an ORDER BY clause for consistent results.',
       );
     }
 
@@ -367,46 +340,20 @@ class SQLServerAdapter extends AbstractAdapter
     return '[' . $identifier . ']';
   }
 
-  public function getPlaceholderStyle(): string
+  public function quoteTable(string $table): string
   {
-    return 'positional'; // SQL Server uses ? placeholders with PDO
+    return $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
   }
 
-  /**
-   * Get the current schema.
-   */
-  public function getCurrentSchema(): string
+  public function limit(string $sql, int $count): string
   {
-    return $this->schema;
-  }
-
-  /**
-   * Get SQL Server version.
-   */
-  public function getServerVersion(): string
-  {
-    $result = $this->query("SELECT @@VERSION as version");
-    return $result[0]['version'] ?? '';
-  }
-
-  /**
-   * Get all available schemas.
-   */
-  public function getSchemas(): array
-  {
-    $result = $this->query(
-      "SELECT SCHEMA_NAME 
-             FROM INFORMATION_SCHEMA.SCHEMATA 
-             WHERE SCHEMA_NAME NOT IN ('guest', 'INFORMATION_SCHEMA', 'sys')
-             ORDER BY SCHEMA_NAME"
-    );
-    return array_column($result, 'SCHEMA_NAME');
+    return "{$sql} OFFSET 0 ROWS FETCH NEXT {$count} ROWS ONLY";
   }
 
   public function reserveIds(string $table, int $next): void
   {
-    $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-    $identity = $this->query("SELECT IDENT_CURRENT(?) AS cur, IDENT_SEED(?) AS seed", [$qualified, $qualified])[0];
+    $qualified = $this->quoteTable($table);
+    $identity = $this->query('SELECT IDENT_CURRENT(?) AS cur, IDENT_SEED(?) AS seed', [$qualified, $qualified])[0];
     if ($identity['cur'] === null) {
       return; // No identity column
     }
@@ -435,7 +382,7 @@ class SQLServerAdapter extends AbstractAdapter
    */
   public function enableIdentityInsert(string $table): void
   {
-    $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $quotedTable = $this->quoteTable($table);
     $this->getPdo()->exec("SET IDENTITY_INSERT {$quotedTable} ON");
   }
 
@@ -444,7 +391,7 @@ class SQLServerAdapter extends AbstractAdapter
    */
   public function disableIdentityInsert(string $table): void
   {
-    $quotedTable = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $quotedTable = $this->quoteTable($table);
     $this->getPdo()->exec("SET IDENTITY_INSERT {$quotedTable} OFF");
   }
 
@@ -473,7 +420,7 @@ class SQLServerAdapter extends AbstractAdapter
       isAutoIncrement: ($columnData['IS_IDENTITY'] ?? 0) == 1,
       isUnique: false,
       comment: null,
-      extra: []
+      extra: [],
     );
   }
 

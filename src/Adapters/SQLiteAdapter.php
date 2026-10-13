@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * SQLite Database Adapter
- * 
+ *
  * Full-featured SQLite adapter with schema introspection and transaction support.
  * Ideal for testing, development, and embedded use cases.
  */
@@ -68,7 +68,7 @@ class SQLiteAdapter extends AbstractAdapter
              FROM sqlite_master 
              WHERE type = 'table' 
              AND name NOT LIKE 'sqlite_%'
-             ORDER BY name"
+             ORDER BY name",
     );
 
     return array_column($result, 'name');
@@ -80,9 +80,9 @@ class SQLiteAdapter extends AbstractAdapter
     return $this->buildTableSchema($table, $columnsData);
   }
 
-  public function getColumns(string $table): array
+  protected function getColumns(string $table): array
   {
-    return $this->query("PRAGMA table_info(" . $this->quoteIdentifier($table) . ")");
+    return $this->query('PRAGMA table_info(' . $this->quoteIdentifier($table) . ')');
   }
 
   public function getPrimaryKey(string $table): string|array|null
@@ -104,7 +104,7 @@ class SQLiteAdapter extends AbstractAdapter
 
   public function getForeignKeys(string $table): array
   {
-    $result = $this->query("PRAGMA foreign_key_list(" . $this->quoteIdentifier($table) . ")");
+    $result = $this->query('PRAGMA foreign_key_list(' . $this->quoteIdentifier($table) . ')');
 
     $foreignKeys = [];
     foreach ($result as $row) {
@@ -121,16 +121,16 @@ class SQLiteAdapter extends AbstractAdapter
     return $foreignKeys;
   }
 
-  public function getIndexes(string $table): array
+  protected function getIndexes(string $table): array
   {
-    $result = $this->query("PRAGMA index_list(" . $this->quoteIdentifier($table) . ")");
+    $result = $this->query('PRAGMA index_list(' . $this->quoteIdentifier($table) . ')');
 
     $indexes = [];
     foreach ($result as $row) {
       $indexName = $row['name'];
 
       // Get columns for this index
-      $indexInfo = $this->query("PRAGMA index_info(" . $this->quoteIdentifier($indexName) . ")");
+      $indexInfo = $this->query('PRAGMA index_info(' . $this->quoteIdentifier($indexName) . ')');
 
       $indexes[] = [
         'name' => $indexName,
@@ -144,25 +144,6 @@ class SQLiteAdapter extends AbstractAdapter
   }
 
   // =========================================================================
-  // Transaction Support
-  // =========================================================================
-
-  public function savepoint(string $name): void
-  {
-    $this->execute("SAVEPOINT {$name}");
-  }
-
-  public function rollbackToSavepoint(string $name): void
-  {
-    $this->execute("ROLLBACK TO SAVEPOINT {$name}");
-  }
-
-  public function releaseSavepoint(string $name): void
-  {
-    $this->execute("RELEASE SAVEPOINT {$name}");
-  }
-
-  // =========================================================================
   // Utility Methods
   // =========================================================================
 
@@ -171,36 +152,6 @@ class SQLiteAdapter extends AbstractAdapter
     // SQLite uses double quotes for identifier quoting
     $identifier = str_replace('"', '""', $identifier);
     return '"' . $identifier . '"';
-  }
-
-  public function getPlaceholderStyle(): string
-  {
-    return 'positional'; // SQLite uses ? placeholders
-  }
-
-  /**
-   * Get SQLite version.
-   */
-  public function getServerVersion(): string
-  {
-    $result = $this->query("SELECT sqlite_version() as version");
-    return $result[0]['version'] ?? '';
-  }
-
-  /**
-   * Vacuum the database to reclaim space.
-   */
-  public function vacuum(): void
-  {
-    $this->execute('VACUUM');
-  }
-
-  /**
-   * Analyze the database for query optimization.
-   */
-  public function analyze(): void
-  {
-    $this->execute('ANALYZE');
   }
 
   // =========================================================================
@@ -231,7 +182,7 @@ class SQLiteAdapter extends AbstractAdapter
       isAutoIncrement: $columnData['pk'] > 0 && strtoupper($type) === 'INTEGER',
       isUnique: false,
       comment: null,
-      extra: []
+      extra: [],
     );
   }
 

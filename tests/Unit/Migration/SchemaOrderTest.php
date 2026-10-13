@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Migration;
 
-use PHPUnit\Framework\TestCase;
 use Mygra\Adapters\SQLiteAdapter;
 use Mygra\Config\SchemaConfig;
 use Mygra\Migration\SchemaOrder;
+use PHPUnit\Framework\TestCase;
 
 class SchemaOrderTest extends TestCase
 {
@@ -17,11 +17,11 @@ class SchemaOrderTest extends TestCase
   {
     $this->source = new SQLiteAdapter();
     $this->source->connect(['database' => ':memory:']);
-    $this->source->execute("CREATE TABLE users (id INTEGER PRIMARY KEY)");
-    $this->source->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT REFERENCES users(id))");
-    $this->source->execute("CREATE TABLE comments (id INTEGER PRIMARY KEY, post_id INT REFERENCES posts(id))");
-    $this->source->execute("CREATE TABLE categories (id INTEGER PRIMARY KEY, parent_id INT REFERENCES categories(id))");
-    $this->source->execute("CREATE TABLE tags (id INTEGER PRIMARY KEY)");
+    $this->source->execute('CREATE TABLE users (id INTEGER PRIMARY KEY)');
+    $this->source->execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT REFERENCES users(id))');
+    $this->source->execute('CREATE TABLE comments (id INTEGER PRIMARY KEY, post_id INT REFERENCES posts(id))');
+    $this->source->execute('CREATE TABLE categories (id INTEGER PRIMARY KEY, parent_id INT REFERENCES categories(id))');
+    $this->source->execute('CREATE TABLE tags (id INTEGER PRIMARY KEY)');
   }
 
   private function schema(string $table, array $options = []): SchemaConfig

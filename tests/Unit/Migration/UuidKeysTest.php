@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Migration;
 
-use PHPUnit\Framework\TestCase;
 use Mygra\Adapters\SQLiteAdapter;
 use Mygra\Config\SchemaConfig;
 use Mygra\Migration\MigrationExecutor;
 use Mygra\Support\Uuid;
+use PHPUnit\Framework\TestCase;
 
 /**
  * Integer IDs become UUIDv5 of "<source table>:<old id>"; references follow.
@@ -23,10 +23,10 @@ class UuidKeysTest extends TestCase
   {
     $this->source = new SQLiteAdapter();
     $this->source->connect(['database' => ':memory:']);
-    $this->source->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    $this->source->execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
     $this->source->execute("INSERT INTO users VALUES (1, 'ada'), (2, 'bo')");
-    $this->source->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT)");
-    $this->source->execute("INSERT INTO posts VALUES (10, 2), (11, 1)");
+    $this->source->execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, author_id INT)');
+    $this->source->execute('INSERT INTO posts VALUES (10, 2), (11, 1)');
 
     $this->target = new SQLiteAdapter();
     $this->target->connect(['database' => ':memory:']);
@@ -66,13 +66,13 @@ class UuidKeysTest extends TestCase
 
     $this->assertSame(
       [['id' => $this->uuid('posts:10'), 'author_id' => $this->uuid('users:2')], ['id' => $this->uuid('posts:11'), 'author_id' => $this->uuid('users:1')]],
-      $this->target->query("SELECT id, author_id FROM app_posts ORDER BY author_id = '{$this->uuid('users:1')}'")
+      $this->target->query("SELECT id, author_id FROM app_posts ORDER BY author_id = '{$this->uuid('users:1')}'"),
     );
 
     // An app row Mygra didn't write is not counted by verify
     $this->target->execute("INSERT INTO app_users VALUES ('" . $this->uuid('elsewhere') . "', 'app')");
     foreach ($this->schemas as $schema) {
-      $this->assertTrue($executor->verify($schema)['match'], $schema->name);
+      $this->assertTrue($executor->verify($schema)->matches(), $schema->name);
     }
 
     // No offsets to keep: nothing for verify to clean up
@@ -87,7 +87,7 @@ class UuidKeysTest extends TestCase
     $rerun = $this->executor(['upsert' => true])->execute($this->schemas['users']);
     $this->assertTrue($rerun->isSuccess(), (string) $rerun->getError());
     $this->assertSame(2, $this->target->getRowCount('app_users'));
-    $this->assertSame('ada2', $this->target->query("SELECT name FROM app_users WHERE id = ?", [$this->uuid('users:1')])[0]['name']);
+    $this->assertSame('ada2', $this->target->query('SELECT name FROM app_users WHERE id = ?', [$this->uuid('users:1')])[0]['name']);
 
     $resume = $this->executor(['resume' => true])->execute($this->schemas['users']);
     $this->assertFalse($resume->isSuccess());

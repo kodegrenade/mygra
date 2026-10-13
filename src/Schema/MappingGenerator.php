@@ -6,14 +6,14 @@ namespace Mygra\Schema;
 
 /**
  * Mapping Generator
- * 
+ *
  * Analyzes source and target tables to suggest field mappings.
  */
 class MappingGenerator
 {
   /**
    * Generate suggested mappings between source and target tables.
-   * 
+   *
    * @param TableSchema $source
    * @param TableSchema $target
    * @param float $threshold Similarity threshold (0.0 to 1.0, where 1.0 is exact match)
@@ -74,10 +74,10 @@ class MappingGenerator
   public function toYaml(array $suggestions): string
   {
     if (empty($suggestions)) {
-      return "fields: {}";
+      return 'fields: {}';
     }
 
-    $lines = ["fields:"];
+    $lines = ['fields:'];
     foreach ($suggestions as $src => $tgt) {
       $lines[] = "  {$src}: {$tgt}";
     }
