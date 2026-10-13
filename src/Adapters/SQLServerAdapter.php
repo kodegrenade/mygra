@@ -18,6 +18,12 @@ class SQLServerAdapter extends AbstractAdapter
   protected string $driver = 'sqlsrv';
   private string $schema = 'dbo';
 
+  /** Documented limit is 2100, but a request with exactly 2100 is rejected; keep a margin */
+  protected int $maxParams = 2000;
+
+  /** Most rows a single INSERT ... VALUES may hold */
+  protected int $maxRowsPerInsert = 1000;
+
   // =========================================================================
   // Connection Management
   // =========================================================================
@@ -262,8 +268,6 @@ class SQLServerAdapter extends AbstractAdapter
       return 0;
     }
 
-    // SQL Server allows at most 1000 rows per INSERT and 2100 parameters per statement
-    $maxBatchSize = max(1, min(1000, intdiv(2100, count($columns))));
     $totalInserted = 0;
 
     // Explicit values for an IDENTITY column need IDENTITY_INSERT
@@ -281,7 +285,7 @@ class SQLServerAdapter extends AbstractAdapter
     $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
 
     try {
-      foreach (array_chunk($rows, $maxBatchSize) as $batch) {
+      foreach (array_chunk($rows, $this->insertChunkSize(count($columns))) as $batch) {
         $placeholders = implode(', ', array_fill(0, count($batch), $placeholderRow));
         $sql = "INSERT INTO {$qualified} ({$columnList}) VALUES {$placeholders}";
 
@@ -449,25 +453,24 @@ class SQLServerAdapter extends AbstractAdapter
   public function reserveIds(string $table, int $next): void
   {
     $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
-    $identity = $this->query(
-      "SELECT CAST(last_value AS BIGINT) AS last_value FROM sys.identity_columns WHERE object_id = OBJECT_ID(?)",
-      [$qualified]
-    );
-    if (!$identity) {
+    $identity = $this->query("SELECT IDENT_CURRENT(?) AS cur, IDENT_SEED(?) AS seed", [$qualified, $qualified])[0];
+    if ($identity['cur'] === null) {
       return; // No identity column
     }
 
-    // RESEED n: the next ID is n + 1 once the column has handed out a value (last_value set),
-    // but n itself while it never has (last_value NULL)
-    $last = $identity[0]['last_value'];
-    if ($last === null) {
-      $reseed = $next;
-    } elseif ((int) $last >= $next - 1) {
+    // RESEED n: the next ID is n + 1 once the column has handed out a value, but n itself while
+    // it never has. sys.identity_columns.last_value would say which, but lags behind recent inserts;
+    // "no rows and still at the seed" means never used (a table emptied by DELETE wastes one ID, harmless)
+    $current = (int) $identity['cur'];
+    $neverUsed = $current === (int) $identity['seed']
+      && !$this->query("SELECT TOP 1 1 AS found FROM {$qualified}");
+
+    $nextId = $neverUsed ? $current : $current + 1;
+    if ($nextId >= $next) {
       return; // Already far enough; RESEED could move it backwards
-    } else {
-      $reseed = $next - 1;
     }
 
+    $reseed = $neverUsed ? $next : $next - 1;
     $this->getPdo()->exec("DBCC CHECKIDENT ({$this->quote($qualified)}, RESEED, {$reseed})");
   }
 

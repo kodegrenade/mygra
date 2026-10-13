@@ -142,11 +142,9 @@ abstract class AbstractAdapter implements AdapterInterface
     $columnList = implode(', ', $quotedColumns);
     $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
 
-    // Wide tables: keep rows x columns under the driver's parameter limit
-    $chunkSize = max(1, min($this->maxRowsPerInsert, intdiv($this->maxParams, count($columns))));
     $totalInserted = 0;
 
-    foreach (array_chunk($rows, $chunkSize) as $chunk) {
+    foreach (array_chunk($rows, $this->insertChunkSize(count($columns))) as $chunk) {
       $placeholders = implode(', ', array_fill(0, count($chunk), $placeholderRow));
       $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
 
@@ -162,6 +160,14 @@ abstract class AbstractAdapter implements AdapterInterface
     }
 
     return $totalInserted;
+  }
+
+  /**
+   * Rows per INSERT that keep rows x columns under the driver's parameter limit (wide tables).
+   */
+  protected function insertChunkSize(int $columnCount): int
+  {
+    return max(1, min($this->maxRowsPerInsert, intdiv($this->maxParams, $columnCount)));
   }
 
   public function getRowCount(string $table, ?string $where = null): int
