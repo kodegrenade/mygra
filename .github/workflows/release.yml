@@ -1,0 +1,52 @@
+name: Release
+
+# Pushing a tag like v0.2.0 creates its GitHub release, with that version's CHANGELOG.md section as
+# the notes. Run it by hand (Actions → Release → Run workflow) for a tag that was pushed before
+# this workflow existed. Packagist picks up tags on its own; this only adds the GitHub release.
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to create a release for, e.g. v0.1.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.tag || github.ref }}
+
+    - name: Release notes from CHANGELOG.md
+      env:
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: |
+        version="${TAG#v}"
+        # The lines between "## [<version>]" and the next "## [" heading
+        awk -v v="$version" '
+          index($0, "## [" v "]") == 1 { found = 1; next }
+          found && /^## \[/ { exit }
+          found { print }
+        ' CHANGELOG.md > notes.md
+        if [ ! -s notes.md ]; then
+          echo "::error::CHANGELOG.md has no section for ${version}"
+          exit 1
+        fi
+
+    - name: Create the GitHub release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: |
+        # Tags with a suffix (v1.0.0-rc.1) are pre-releases, like Composer treats them
+        prerelease=""
+        case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+        gh release create "$TAG" --title "Mygra ${TAG}" --notes-file notes.md --verify-tag $prerelease
