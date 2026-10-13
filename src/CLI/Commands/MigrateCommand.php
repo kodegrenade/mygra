@@ -250,6 +250,10 @@ HELP
         $io->text("New IDs: old ID + {$result->getMetadata('id_offset')}");
       }
 
+      foreach ($result->getWarnings() as $warning) {
+        $io->note($warning);
+      }
+
       // Display result; skipped rows are a failure, not a success
       if (!$result->isSuccess()) {
         $io->error("Migration failed: " . $result->getError());

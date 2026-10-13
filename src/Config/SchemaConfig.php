@@ -21,7 +21,7 @@ class SchemaConfig
     public readonly ?string $where = null,
     public readonly array $joins = [],
     public readonly array $options = [],
-    /** @var array<string, array{schema: string, on_missing: string}> target column => parent schema */
+    /** @var array<string, array{column: string, schema: string, on_missing: string, pattern: ?string, replacement: ?string}> name => parent */
     public readonly array $references = []
   ) {}
 
@@ -136,18 +136,44 @@ class SchemaConfig
   }
 
   /**
-   * Normalize references: `author_id: users` or `author_id: { schema: users, on_missing: null }`.
+   * Normalize references:
+   *   `author_id: users`                                  a column holding the parent's ID
+   *   `author_id: { schema: users, on_missing: null }`
+   *   `content: { schema: posts, pattern: '/\?p=(\d+)/' }`  IDs inside text: capture group 1 holds
+   *                                                        one ID or a comma-separated list
+   *   `gallery: { column: content, schema: media, pattern: ... }`  a second reference in the same column
    */
   private static function normalizeReferences(array $references): array
   {
     $normalized = [];
     foreach ($references as $column => $ref) {
       $ref = is_string($ref) ? ['schema' => $ref] : $ref;
+      $pattern = $ref['pattern'] ?? null;
       $onMissing = $ref['on_missing'] ?? 'error';
-      if (!in_array($onMissing, ['error', 'null'], true)) {
-        throw new \InvalidArgumentException("references.{$column}.on_missing must be error or null, got '{$onMissing}'");
+
+      if ($pattern !== null) {
+        // preg_match_all fills one array per group even without a match, so this also counts groups
+        if (@preg_match_all($pattern, '', $groups) === false || count($groups) < 2) {
+          throw new \InvalidArgumentException("references.{$column}.pattern must be a valid regex with a capture group, got '{$pattern}'");
+        }
+        // NULL would wipe the whole text; replace swaps only the dead ID for one that matches nothing
+        $allowed = ['error', 'replace'];
+      } else {
+        $allowed = ['error', 'null'];
       }
-      $normalized[$column] = ['schema' => $ref['schema'], 'on_missing' => $onMissing];
+      if (!in_array($onMissing, $allowed, true)) {
+        throw new \InvalidArgumentException(
+          "references.{$column}.on_missing must be " . implode(' or ', $allowed) . ", got '{$onMissing}'"
+        );
+      }
+
+      $normalized[$column] = [
+        'column' => $ref['column'] ?? $column,
+        'schema' => $ref['schema'],
+        'on_missing' => $onMissing,
+        'pattern' => $pattern,
+        'replacement' => $pattern !== null ? (string) ($ref['replacement'] ?? '0') : null,
+      ];
     }
     return $normalized;
   }

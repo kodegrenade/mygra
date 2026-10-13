@@ -173,6 +173,39 @@ class RoundTripTest extends TestCase
     $this->assertTrue($executor->dropOffsets());
   }
 
+  #[DataProvider('databases')]
+  public function testIdsInsideTextFollowTheirRows(string $envVar)
+  {
+    $db = $this->autoIdTable($envVar, 'mygra_it_text');
+    $table = $db->quoteIdentifier('mygra_it_text');
+    $db->execute("INSERT INTO {$table} (name) VALUES ('existing')");
+    $db->execute("DROP TABLE IF EXISTS {$db->quoteIdentifier('mygra_offsets')}");
+
+    $sqlite = AdapterFactory::create(['driver' => 'sqlite', 'database' => ':memory:']);
+    $sqlite->execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, name TEXT)");
+    $sqlite->execute("INSERT INTO posts VALUES (1, 'to /?p=2'), (2, 'ids=\"1,9\"')");
+
+    $schema = SchemaConfig::fromArray('posts', [
+      'source_table' => 'posts', 'target_table' => 'mygra_it_text',
+      'fields' => ['id' => 'id', 'name' => 'name'], 'options' => ['remap_ids' => true],
+      'references' => [
+        'links' => ['column' => 'name', 'schema' => 'posts', 'pattern' => '/\?p=(\d+)/'],
+        'lists' => ['column' => 'name', 'schema' => 'posts', 'pattern' => '/ids="([^"]*)"/', 'on_missing' => 'replace'],
+      ],
+    ]);
+    $executor = (new MigrationExecutor($sqlite, $db))->setSchemas([$schema]);
+    $result = $executor->execute($schema);
+
+    $this->assertTrue($result->isSuccess(), (string) $result->getError());
+    // Shifted by 1; dead 9 replaced by 0
+    $this->assertEquals(
+      [['id' => 2, 'name' => 'to /?p=3'], ['id' => 3, 'name' => 'ids="2,0"']],
+      $db->query("SELECT id, name FROM {$table} WHERE id > 1 ORDER BY id")
+    );
+    $this->assertTrue($executor->verify($schema)['match']);
+    $executor->dropOffsets();
+  }
+
   /**
    * Connect to the database under test and (re)create a table with a generated integer ID.
    */

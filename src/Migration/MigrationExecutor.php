@@ -182,8 +182,10 @@ class MigrationExecutor
         }
       };
 
-      $load = function (array $batch) use ($schema, $ids, $rowError, &$insertedCount, &$processedCount): void {
-        [$batch, $orphans] = $this->resolveReferences($batch, $ids['refs']);
+      $replacedCount = 0;
+      $load = function (array $batch) use ($schema, $ids, $rowError, &$insertedCount, &$processedCount, &$replacedCount): void {
+        [$batch, $orphans, $replaced] = $this->resolveReferences($batch, $ids['refs']);
+        $replacedCount += $replaced;
         foreach ($orphans as [$row, $errorMsg]) {
           $rowError($row, $errorMsg);
         }
@@ -223,6 +225,11 @@ class MigrationExecutor
 
       if (!$this->dryRun) {
         $this->target->syncSequences($schema->targetTable);
+      }
+
+      if ($replacedCount > 0) {
+        $result->addWarning("Dead IDs inside text replaced: {$replacedCount} (on_missing: replace)");
+        $this->logger->warning("{$schema->name}: {$replacedCount} dead IDs inside text replaced");
       }
 
       $result->setSuccess(true);
@@ -668,6 +675,10 @@ class MigrationExecutor
         $parentOffset = $self ? $offset : $this->requireOffset($parent->name, "migrate it before '{$schema->name}'");
       }
 
+      if ($ref['on_missing'] === 'replace') {
+        $this->assertReplacementMatchesNothing($column, $ref['replacement'], $parent, $parentOffset);
+      }
+
       // A self-reference may point at a row later in this same run, so check the source instead
       $refs[$column] = $ref + [
         'offset' => $parentOffset,
@@ -685,20 +696,30 @@ class MigrationExecutor
 
   /**
    * Check each reference against its parent and rewrite it to the parent's new ID.
-   * Rows whose reference has no parent are returned as orphans (on_missing: error)
-   * or kept with the reference set to NULL (on_missing: null).
+   * A reference with no parent makes the row an orphan (on_missing: error), becomes NULL
+   * (on_missing: null), or, inside text, is swapped for a value that matches nothing (on_missing: replace).
    *
-   * @return array{0: array, 1: list<array{0: array, 1: string}>} [rows to load, orphans with messages]
+   * @return array{0: array, 1: list<array{0: array, 1: string}>, 2: int}
+   *   [rows to load, orphans with messages, dead IDs replaced inside text]
    */
   private function resolveReferences(array $rows, array $refs): array
   {
     $orphans = [];
+    $replaced = 0;
 
-    foreach ($refs as $column => $ref) {
+    foreach ($refs as $ref) {
+      $column = $ref['column'];
       // Offset 0 = parent keeps its IDs; leave values (possibly string keys) untouched
       $toNew = fn($v) => $ref['offset'] ? (int) $v + $ref['offset'] : $v;
       $toOld = fn($v) => $ref['offset'] ? (int) $v - $ref['offset'] : $v;
-      $old = array_values(array_unique(array_filter(array_column($rows, $column), fn($v) => $v !== null)));
+
+      // The IDs a row holds: the column itself, or every ID the pattern finds in its text
+      $idsIn = fn($value) => match (true) {
+        $value === null => [],
+        $ref['pattern'] === null => [$value],
+        default => $this->idsInText($ref['pattern'], (string) $value),
+      };
+      $old = array_values(array_unique(array_merge([], ...array_map(fn($row) => $idsIn($row[$column] ?? null), $rows))));
 
       // Old IDs whose parent exists; looked up per batch, in chunks below SQL Server's 2100-parameter limit
       $found = [];
@@ -717,18 +738,102 @@ class MigrationExecutor
         if ($value === null) {
           continue;
         }
-        if (isset($found[(string) $value])) {
-          $rows[$i][$column] = $toNew($value);
-        } elseif ($ref['on_missing'] === 'null') {
-          $rows[$i][$column] = null;
-        } else {
-          $orphans[] = [$row, "{$column} {$value} has no matching row in {$ref['schema']}"];
+
+        if ($ref['pattern'] === null) {
+          if (isset($found[(string) $value])) {
+            $rows[$i][$column] = $toNew($value);
+          } elseif ($ref['on_missing'] === 'null') {
+            $rows[$i][$column] = null;
+          } else {
+            $orphans[] = [$row, "{$column} {$value} has no matching row in {$ref['schema']}"];
+            unset($rows[$i]);
+          }
+          continue;
+        }
+
+        $dead = [];
+        $rows[$i][$column] = $this->rewriteIdsInText($ref['pattern'], (string) $value, function (string $id) use ($found, $toNew, $ref, &$dead): string {
+          if (isset($found[$id])) {
+            return (string) $toNew($id);
+          }
+          $dead[] = $id;
+          return $ref['replacement'];
+        });
+
+        if ($dead && $ref['on_missing'] === 'replace') {
+          $replaced += count($dead);
+        } elseif ($dead) {
+          $orphans[] = [$row, "{$column} contains IDs with no matching row in {$ref['schema']}: " . implode(', ', $dead)];
           unset($rows[$i]);
         }
       }
     }
 
-    return [array_values($rows), $orphans];
+    return [array_values($rows), $orphans, $replaced];
+  }
+
+  /**
+   * IDs a reference pattern finds in text: capture group 1 holds one ID or a comma-separated list.
+   *
+   * @return string[]
+   */
+  private function idsInText(string $pattern, string $text): array
+  {
+    preg_match_all($pattern, $text, $matches);
+    $ids = [];
+    foreach ($matches[1] as $list) {
+      foreach (explode(',', $list) as $id) {
+        if (($id = trim($id)) !== '') {
+          $ids[] = $id;
+        }
+      }
+    }
+    return $ids;
+  }
+
+  /**
+   * Replace each ID inside the pattern's capture group with $map(id), leaving all other text as it was.
+   */
+  private function rewriteIdsInText(string $pattern, string $text, callable $map): string
+  {
+    return preg_replace_callback($pattern, function (array $m) use ($map): string {
+      [$full, $fullAt] = $m[0];
+      [$group, $groupAt] = $m[1];
+      if ($groupAt < 0) {
+        return $full; // group did not take part in this match
+      }
+
+      $parts = array_map(function (string $part) use ($map): string {
+        $id = trim($part);
+        return $id === '' ? $part : substr_replace($part, $map($id), strpos($part, $id), strlen($id));
+      }, explode(',', $group));
+
+      return substr_replace($full, implode(',', $parts), $groupAt - $fullAt, strlen($group));
+    }, $text, -1, $count, PREG_OFFSET_CAPTURE);
+  }
+
+  /**
+   * on_missing: replace must never write a value that points at a real parent row,
+   * neither one already in the target nor one this migration will create.
+   */
+  private function assertReplacementMatchesNothing(string $column, string $replacement, SchemaConfig $parent, int $offset): void
+  {
+    $candidates = [[$this->target, $parent->targetTable, $replacement]];
+    if (is_numeric($replacement)) {
+      $candidates[] = [$this->source, $parent->sourceTable, (string) ((int) $replacement - $offset)];
+    }
+
+    foreach ($candidates as [$db, $table, $value]) {
+      if (!in_array($table, $db->getTables(), true)) {
+        continue;
+      }
+      $key = $db->quoteIdentifier($this->singleKey($db, $table));
+      if ($db->query("SELECT {$key} AS k FROM {$db->quoteIdentifier($table)} WHERE {$key} = ?", [$value])) {
+        throw new \InvalidArgumentException(
+          "references.{$column}: replacement '{$replacement}' would point at a real {$parent->name} row; choose another replacement"
+        );
+      }
+    }
   }
 
   /**

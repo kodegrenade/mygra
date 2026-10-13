@@ -162,7 +162,25 @@ schemas:
 - A reference to a row that does not exist (e.g. a post by a deleted user) is a row error and follows `on_error`. Use `author_id: { schema: users, on_missing: null }` to keep the row with a NULL reference instead.
 - A schema can reference itself (`parent_id: categories`).
 - Offsets are stored in a `mygra_offsets` table in the target. `verify` uses them to check every reference points at the right parent, and a passing `verify` over all schemas removes the table.
-- Needs a single-column integer primary key. IDs inside text (serialized PHP, shortcodes, links) are not rewritten.
+- Needs a single-column integer primary key.
+
+### IDs inside text
+
+IDs also hide inside values: links (`/?p=812`, `/users/7`), ID lists (`ids="4,9"`), anything textual. A `pattern` finds them; its first capture group holds one ID or a comma-separated list. Several references can share a column via `column`:
+
+```yaml
+posts:
+  references:
+    links:   { column: body, schema: posts, pattern: '/\?p=(\d+)/' }
+    gallery: { column: body, schema: media, pattern: '/ids="([^"]*)"/', on_missing: replace }
+```
+
+Only the IDs are rewritten; the rest of the text is untouched. An ID with no matching row (a dead link):
+
+- `on_missing: error` (default): the row fails and follows `on_error`.
+- `on_missing: replace`: the dead ID becomes `0` (or `replacement: <value>`), so the link stays dead instead of pointing at someone else's record. Mygra refuses a replacement that could match a real row, and reports how many it replaced.
+
+JSON paths and PHP-serialized data are not supported yet.
 
 ## Commands
 
