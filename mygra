@@ -12,14 +12,16 @@ declare(strict_types=1);
  *   php mygra suggest source_table target_table
  */
 
-// Find autoloader
+// Composer 2.2+ tells installed binaries where the project's autoloader is. Otherwise: a clone of
+// this repository, or an older Composer running vendor/kodegrenade/mygra/mygra from vendor/bin.
 $autoloaderPaths = [
+  $GLOBALS['_composer_autoload_path'] ?? null,
   __DIR__ . '/vendor/autoload.php',
-  __DIR__ . '/../../../autoload.php',
+  __DIR__ . '/../../autoload.php',
 ];
 
 $autoloaderFound = false;
-foreach ($autoloaderPaths as $path) {
+foreach (array_filter($autoloaderPaths) as $path) {
   if (file_exists($path)) {
     require_once $path;
     $autoloaderFound = true;

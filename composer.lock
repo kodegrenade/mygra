@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ac2da48fe8fd914c69c641227ac9b175",
+    "content-hash": "e53c6c694365759a76b980c51b52bf63",
     "packages": [
         {
             "name": "psr/container",
@@ -4479,7 +4479,7 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
-        "php": ">=8.1",
+        "php": "^8.1",
         "ext-pdo": "*"
     },
     "platform-dev": {},

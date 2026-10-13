@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mygra\CLI;
 
+use Composer\InstalledVersions;
 use Mygra\CLI\Commands\CompareCommand;
 use Mygra\CLI\Commands\FinishCommand;
 use Mygra\CLI\Commands\InitCommand;
@@ -21,14 +22,26 @@ use Symfony\Component\Console\Application as SymfonyApplication;
  */
 class Application extends SymfonyApplication
 {
-  public const VERSION = '1.0.0';
   public const NAME = 'Mygra';
+  public const PACKAGE = 'kodegrenade/mygra';
 
   public function __construct()
   {
-    parent::__construct(self::NAME, self::VERSION);
+    parent::__construct(self::NAME, self::version());
 
     $this->registerCommands();
+  }
+
+  /**
+   * The installed version, from the git tag Composer installed (or 'dev-main' from a clone),
+   * so it never needs bumping by hand.
+   */
+  public static function version(): string
+  {
+    if (InstalledVersions::isInstalled(self::PACKAGE)) {
+      return InstalledVersions::getPrettyVersion(self::PACKAGE) ?? 'unknown';
+    }
+    return 'unknown';
   }
 
   /**

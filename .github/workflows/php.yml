@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  # Weekly, so a new release of a dependency that breaks Mygra shows up even without commits
+  schedule:
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
@@ -46,6 +49,41 @@ jobs:
 
     - name: Static analysis
       run: composer analyse
+
+  dependency-range:
+    # composer.lock pins one set of versions; people who `composer require` Mygra get whatever their
+    # project resolves to. Test both ends of the ranges in composer.json, ignoring the lock.
+    name: Dependencies (${{ matrix.deps }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - deps: lowest
+            php: "8.1"
+            flags: --prefer-lowest --prefer-stable
+          - deps: highest
+            php: "8.5"
+            flags: ""
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ matrix.php }}
+        extensions: pdo_sqlite
+        coverage: none
+
+    - name: Resolve ${{ matrix.deps }} versions
+      run: |
+        composer config --unset platform.php
+        composer update ${{ matrix.flags }} --no-interaction --no-progress
+
+    - name: Unit tests
+      run: vendor/bin/phpunit --testsuite unit
 
   tests:
     name: Tests (PHP ${{ matrix.php }})

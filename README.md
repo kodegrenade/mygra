@@ -54,16 +54,25 @@ It is built for real application migrations: merging into an app that already ha
 ## Requirements and installation
 
 - PHP 8.1 or newer with PDO and the driver extension for each database you use: `pdo_mysql`, `pdo_pgsql`, `pdo_sqlite`, `pdo_sqlsrv` (or `pdo_dblib`).
-- Composer.
+- Symfony 6.4, 7 or 8 components, if your project already uses Symfony.
+
+In a project:
+
+```bash
+composer require --dev kodegrenade/mygra
+vendor/bin/mygra list
+```
+
+Standalone:
 
 ```bash
 git clone https://github.com/kodegrenade/mygra.git
 cd mygra
 composer install
-./mygra list        # or: php mygra list
+./mygra list
 ```
 
-Inside a project: `composer require --dev kodegrenade/mygra`, then run `vendor/bin/mygra`.
+Mygra is 0.x: until 1.0, a minor release may change the configuration format. Every such change is listed in the [CHANGELOG](CHANGELOG.md).
 
 ## Quick start
 
