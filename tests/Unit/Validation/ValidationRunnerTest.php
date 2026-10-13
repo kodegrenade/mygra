@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Validation;
 
-use PHPUnit\Framework\TestCase;
 use Mygra\Validation\ValidationRunner;
+use PHPUnit\Framework\TestCase;
 
 class ValidationRunnerTest extends TestCase
 {
@@ -16,13 +16,13 @@ class ValidationRunnerTest extends TestCase
     $row = [
       'email' => 'valid@example.com',
       'age' => 25,
-      'name' => ''
+      'name' => '',
     ];
 
     $rules = [
       'email' => [['validator' => 'email']],
       'age' => [['validator' => 'type', 'options' => ['type' => 'int']]],
-      'name' => [['validator' => 'required']]
+      'name' => [['validator' => 'required']],
     ];
 
     $result = $runner->validateRow($row, $rules);

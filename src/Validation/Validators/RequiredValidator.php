@@ -27,11 +27,16 @@ class RequiredValidator implements ValidatorInterface
 
   public function getMessage(): string
   {
-    return "This field is required";
+    return 'This field is required';
   }
 
   public function getName(): string
   {
     return 'required';
+  }
+
+  public function getOptionNames(): array
+  {
+    return [];
   }
 }

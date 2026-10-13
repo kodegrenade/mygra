@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace Mygra\Validation;
 
-use Mygra\Validation\Validators\RequiredValidator;
 use Mygra\Validation\Validators\EmailValidator;
 use Mygra\Validation\Validators\LengthValidator;
-use Mygra\Validation\Validators\TypeValidator;
 use Mygra\Validation\Validators\RegexValidator;
+use Mygra\Validation\Validators\RequiredValidator;
+use Mygra\Validation\Validators\TypeValidator;
 
 /**
  * Validation Runner
- * 
+ *
  * Orchestrates the validation of data rows against rules.
  */
 class ValidationRunner
@@ -44,7 +44,7 @@ class ValidationRunner
 
   /**
    * Validate a single row against field rules.
-   * 
+   *
    * @param array $row The data row to validate
    * @param array $rules Field rules: ['field' => [['validator' => 'name', 'options' => []], ...]]
    * @return ValidationResult
@@ -60,8 +60,11 @@ class ValidationRunner
         $name = $rule['validator'] ?? null;
         $options = $rule['options'] ?? [];
 
-        if (!$name || !isset($this->validators[$name])) {
-          continue; // Skip unknown validators
+        if (!is_string($name) || !isset($this->validators[$name])) {
+          throw new \InvalidArgumentException(
+            "Unknown validator '" . (is_string($name) ? $name : '') . "' for field '{$field}'; use one of: "
+              . implode(', ', array_keys($this->validators)),
+          );
         }
 
         $validator = $this->validators[$name];
@@ -72,6 +75,16 @@ class ValidationRunner
     }
 
     return $result;
+  }
+
+  /**
+   * Get all registered validators.
+   *
+   * @return array<string, ValidatorInterface>
+   */
+  public function getValidators(): array
+  {
+    return $this->validators;
   }
 
   private function registerDefaultValidators(): void

@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * MySQL Database Adapter
- * 
+ *
  * Full-featured MySQL/MariaDB adapter with schema introspection,
  * transaction support, and streaming capabilities.
  */
@@ -36,7 +36,7 @@ class MySQLAdapter extends AbstractAdapter
       \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
       \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
       \PDO::ATTR_EMULATE_PREPARES => false,
-      \PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => true,
+      self::bufferedQueryAttr() => true,
     ];
 
     // Merge custom options
@@ -48,27 +48,52 @@ class MySQLAdapter extends AbstractAdapter
       $dsn,
       $config['user'] ?? 'root',
       $config['password'] ?? '',
-      $options
+      $options,
     );
 
     // Set SQL mode (relaxed to support legacy zero dates)
     $this->pdo->exec("SET sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'");
   }
 
+  protected function upsertClause(array $columns, array $keyColumns): string
+  {
+    // VALUES() is deprecated in MySQL 8.0.20+ but still works, and is the only form MariaDB accepts.
+    // With no non-key columns, "key = VALUES(key)" makes an existing row a no-op instead of an error.
+    $q = [$this, 'quoteIdentifier'];
+    $updates = array_diff($columns, $keyColumns) ?: $keyColumns;
+    return ' ON DUPLICATE KEY UPDATE ' . implode(', ', array_map(fn($c) => "{$q($c)} = VALUES({$q($c)})", $updates));
+  }
+
+  public function reserveIds(string $table, int $next): void
+  {
+    // InnoDB never sets the counter below MAX(id) + 1, so this cannot move it backwards past used IDs
+    $this->getPdo()->exec("ALTER TABLE {$this->quoteTable($table)} AUTO_INCREMENT = {$next}");
+  }
+
+  /**
+   * PDO::MYSQL_ATTR_USE_BUFFERED_QUERY is deprecated in PHP 8.5; Pdo\Mysql only exists from 8.4.
+   */
+  private static function bufferedQueryAttr(): int
+  {
+    return defined('Pdo\Mysql::ATTR_USE_BUFFERED_QUERY')
+      ? \Pdo\Mysql::ATTR_USE_BUFFERED_QUERY
+      : \PDO::MYSQL_ATTR_USE_BUFFERED_QUERY;
+  }
+
   /**
    * Enable unbuffered queries for streaming large datasets.
    */
-  public function enableUnbufferedQueries(): void
+  private function enableUnbufferedQueries(): void
   {
-    $this->pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+    $this->pdo->setAttribute(self::bufferedQueryAttr(), false);
   }
 
   /**
    * Disable unbuffered queries (return to default behavior).
    */
-  public function disableUnbufferedQueries(): void
+  private function disableUnbufferedQueries(): void
   {
-    $this->pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+    $this->pdo->setAttribute(self::bufferedQueryAttr(), true);
   }
 
   public function streamQuery(string $sql, array $params = []): \Generator
@@ -99,7 +124,7 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.TABLES 
              WHERE TABLE_SCHEMA = DATABASE() 
              AND TABLE_TYPE = 'BASE TABLE'
-             ORDER BY TABLE_NAME"
+             ORDER BY TABLE_NAME",
     );
 
     return array_column($result, 'TABLE_NAME');
@@ -111,10 +136,10 @@ class MySQLAdapter extends AbstractAdapter
     return $this->buildTableSchema($table, $columnsData);
   }
 
-  public function getColumns(string $table): array
+  protected function getColumns(string $table): array
   {
     return $this->query(
-      "SELECT 
+      'SELECT 
                 COLUMN_NAME,
                 DATA_TYPE,
                 COLUMN_TYPE,
@@ -129,8 +154,8 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.COLUMNS 
              WHERE TABLE_SCHEMA = DATABASE() 
              AND TABLE_NAME = ?
-             ORDER BY ORDINAL_POSITION",
-      [$table]
+             ORDER BY ORDINAL_POSITION',
+      [$table],
     );
   }
 
@@ -143,7 +168,7 @@ class MySQLAdapter extends AbstractAdapter
              AND TABLE_NAME = ?
              AND CONSTRAINT_NAME = 'PRIMARY'
              ORDER BY ORDINAL_POSITION",
-      [$table]
+      [$table],
     );
 
     if (empty($result)) {
@@ -157,7 +182,7 @@ class MySQLAdapter extends AbstractAdapter
   public function getForeignKeys(string $table): array
   {
     $result = $this->query(
-      "SELECT 
+      'SELECT 
                 CONSTRAINT_NAME,
                 COLUMN_NAME,
                 REFERENCED_TABLE_NAME,
@@ -165,8 +190,8 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
              WHERE TABLE_SCHEMA = DATABASE()
              AND TABLE_NAME = ?
-             AND REFERENCED_TABLE_NAME IS NOT NULL",
-      [$table]
+             AND REFERENCED_TABLE_NAME IS NOT NULL',
+      [$table],
     );
 
     $foreignKeys = [];
@@ -182,10 +207,10 @@ class MySQLAdapter extends AbstractAdapter
     return $foreignKeys;
   }
 
-  public function getIndexes(string $table): array
+  protected function getIndexes(string $table): array
   {
     $result = $this->query(
-      "SELECT 
+      'SELECT 
                 INDEX_NAME,
                 COLUMN_NAME,
                 NON_UNIQUE,
@@ -193,8 +218,8 @@ class MySQLAdapter extends AbstractAdapter
              FROM INFORMATION_SCHEMA.STATISTICS
              WHERE TABLE_SCHEMA = DATABASE()
              AND TABLE_NAME = ?
-             ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-      [$table]
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+      [$table],
     );
 
     // Group by index name
@@ -216,75 +241,6 @@ class MySQLAdapter extends AbstractAdapter
   }
 
   // =========================================================================
-  // Batch Operations (Optimized for MySQL)
-  // =========================================================================
-
-  public function batchInsert(string $table, array $columns, array $rows): int
-  {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    // Use multi-row INSERT for efficiency
-    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-    $placeholders = implode(', ', array_fill(0, count($rows), $placeholderRow));
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-    // Flatten the rows array for binding
-    $values = [];
-    foreach ($rows as $row) {
-      foreach ($columns as $col) {
-        $values[] = $row[$col] ?? null;
-      }
-    }
-
-    return $this->execute($sql, $values);
-  }
-
-  /**
-   * Batch insert with ON DUPLICATE KEY UPDATE support.
-   */
-  public function batchUpsert(string $table, array $columns, array $rows, array $updateColumns = []): int
-  {
-    if (empty($rows)) {
-      return 0;
-    }
-
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-    $placeholders = implode(', ', array_fill(0, count($rows), $placeholderRow));
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
-
-    // Add ON DUPLICATE KEY UPDATE clause
-    if (!empty($updateColumns)) {
-      $updates = [];
-      foreach ($updateColumns as $col) {
-        $quoted = $this->quoteIdentifier($col);
-        $updates[] = "{$quoted} = VALUES({$quoted})";
-      }
-      $sql .= " ON DUPLICATE KEY UPDATE " . implode(', ', $updates);
-    }
-
-    $values = [];
-    foreach ($rows as $row) {
-      foreach ($columns as $col) {
-        $values[] = $row[$col] ?? null;
-      }
-    }
-
-    return $this->execute($sql, $values);
-  }
-
-  // =========================================================================
   // Utility Methods
   // =========================================================================
 
@@ -293,28 +249,6 @@ class MySQLAdapter extends AbstractAdapter
     // MySQL uses backticks for identifier quoting
     $identifier = str_replace('`', '``', $identifier);
     return '`' . $identifier . '`';
-  }
-
-  public function getPlaceholderStyle(): string
-  {
-    return 'positional'; // MySQL uses ? placeholders
-  }
-
-  /**
-   * Get the current database name.
-   */
-  public function getCurrentDatabase(): string
-  {
-    $result = $this->query("SELECT DATABASE() as db");
-    return $result[0]['db'] ?? '';
-  }
-
-  /**
-   * Get MySQL server version.
-   */
-  public function getServerVersion(): string
-  {
-    return $this->getPdo()->getAttribute(\PDO::ATTR_SERVER_VERSION);
   }
 
   // =========================================================================
@@ -344,7 +278,7 @@ class MySQLAdapter extends AbstractAdapter
       isAutoIncrement: str_contains(strtolower($extra), 'auto_increment'),
       isUnique: ($columnData['COLUMN_KEY'] ?? '') === 'UNI',
       comment: $columnData['COLUMN_COMMENT'] ?? null,
-      extra: ['mysql_extra' => $extra]
+      extra: ['mysql_extra' => $extra],
     );
   }
 

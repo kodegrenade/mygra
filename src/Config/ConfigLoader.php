@@ -8,14 +8,13 @@ use Symfony\Component\Yaml\Yaml;
 
 /**
  * Configuration Loader
- * 
- * Loads and validates migration configuration from YAML files.
- * Supports environment variable interpolation.
+ *
+ * Loads migration configuration from YAML, JSON or PHP files, interpolates environment variables,
+ * and validates the result (ConfigValidator) so every command sees a checked configuration.
  */
 class ConfigLoader
 {
   private array $config = [];
-  private string $basePath = '';
 
   /**
    * Load configuration from a file.
@@ -36,29 +35,29 @@ class ConfigLoader
       throw new \InvalidArgumentException("Configuration file not found: {$path}");
     }
 
-    $this->basePath = dirname(realpath($path));
     $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
-    $content = match ($extension) {
-      'yaml', 'yml' => Yaml::parseFile($path),
-      'json' => json_decode(file_get_contents($path), true),
-      'php' => require $path,
-      default => throw new \InvalidArgumentException("Unsupported config format: {$extension}"),
-    };
+    try {
+      $content = match ($extension) {
+        'yaml', 'yml' => Yaml::parseFile($path),
+        'json' => json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR),
+        'php' => require $path,
+        default => throw new \InvalidArgumentException("Unsupported config format: {$extension}"),
+      };
+    } catch (\JsonException $e) {
+      throw new InvalidConfigException(["invalid JSON: {$e->getMessage()}"], $path);
+    }
+
+    if (!is_array($content) || $content === []) {
+      throw new InvalidConfigException([
+        'the file is ' . ($content === null || $content === [] ? 'empty' : 'not a map of settings (got ' . get_debug_type($content) . ')')
+          . '; it needs connections and schemas (see config/mygra.yaml)',
+      ], $path);
+    }
 
     $this->config = $this->interpolateEnvVars($content);
-    $this->validate();
+    ConfigValidator::validate($this->config, $path);
 
-    return $this;
-  }
-
-  /**
-   * Load configuration from array.
-   */
-  public function loadArray(array $config): self
-  {
-    $this->config = $config;
-    $this->validate();
     return $this;
   }
 
@@ -94,14 +93,6 @@ class ConfigLoader
   public function getTargetConnection(): array
   {
     return $this->config['connections']['target'] ?? [];
-  }
-
-  /**
-   * Get global settings.
-   */
-  public function getSettings(): array
-  {
-    return $this->config['settings'] ?? [];
   }
 
   /**
@@ -141,22 +132,6 @@ class ConfigLoader
   }
 
   /**
-   * Get the raw configuration array.
-   */
-  public function toArray(): array
-  {
-    return $this->config;
-  }
-
-  /**
-   * Get base path of the configuration file.
-   */
-  public function getBasePath(): string
-  {
-    return $this->basePath;
-  }
-
-  /**
    * Interpolate environment variables in configuration values.
    * Supports ${VAR_NAME} syntax.
    */
@@ -172,13 +147,13 @@ class ConfigLoader
 
             if ($envValue === false) {
               throw new \RuntimeException(
-                "Environment variable not set: {$envVar}"
+                "Environment variable not set: {$envVar}",
               );
             }
 
             return $envValue;
           },
-          $value
+          $value,
         );
 
         // Also support ${VAR:-default} syntax
@@ -190,54 +165,11 @@ class ConfigLoader
             $envValue = getenv($envVar);
             return $envValue !== false ? $envValue : $default;
           },
-          $value
+          $value,
         );
       }
     });
 
     return $config;
-  }
-
-  /**
-   * Validate the configuration structure.
-   */
-  private function validate(): void
-  {
-    $errors = [];
-
-    // Check required sections
-    if (!isset($this->config['connections'])) {
-      $errors[] = "Missing required section: 'connections'";
-    } else {
-      if (!isset($this->config['connections']['source'])) {
-        $errors[] = "Missing required connection: 'connections.source'";
-      }
-      if (!isset($this->config['connections']['target'])) {
-        $errors[] = "Missing required connection: 'connections.target'";
-      }
-    }
-
-    if (!isset($this->config['schemas']) || empty($this->config['schemas'])) {
-      $errors[] = "At least one schema must be defined in 'schemas'";
-    }
-
-    // Validate each schema
-    foreach ($this->config['schemas'] ?? [] as $name => $schema) {
-      if (!isset($schema['source_table'])) {
-        $errors[] = "Schema '{$name}' missing required field: 'source_table'";
-      }
-      if (!isset($schema['target_table'])) {
-        $errors[] = "Schema '{$name}' missing required field: 'target_table'";
-      }
-      if (!isset($schema['fields']) || empty($schema['fields'])) {
-        $errors[] = "Schema '{$name}' must have at least one field mapping";
-      }
-    }
-
-    if (!empty($errors)) {
-      throw new \InvalidArgumentException(
-        "Configuration validation failed:\n - " . implode("\n - ", $errors)
-      );
-    }
   }
 }

@@ -4,32 +4,44 @@ declare(strict_types=1);
 
 namespace Mygra\CLI;
 
-use Symfony\Component\Console\Application as SymfonyApplication;
-use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Output\OutputInterface;
-use Mygra\CLI\Commands\MigrateCommand;
-use Mygra\CLI\Commands\InspectCommand;
-use Mygra\CLI\Commands\ValidateCommand;
-use Mygra\CLI\Commands\InitCommand;
-use Mygra\CLI\Commands\RollbackCommand;
+use Composer\InstalledVersions;
 use Mygra\CLI\Commands\CompareCommand;
+use Mygra\CLI\Commands\FinishCommand;
+use Mygra\CLI\Commands\InitCommand;
+use Mygra\CLI\Commands\InspectCommand;
+use Mygra\CLI\Commands\MigrateCommand;
 use Mygra\CLI\Commands\SuggestCommand;
+use Mygra\CLI\Commands\ValidateCommand;
+use Mygra\CLI\Commands\VerifyCommand;
+use Symfony\Component\Console\Application as SymfonyApplication;
 
 /**
  * Mygra CLI Application
- * 
+ *
  * Main entry point for the command-line interface.
  */
 class Application extends SymfonyApplication
 {
-  public const VERSION = '1.0.0';
   public const NAME = 'Mygra';
+  public const PACKAGE = 'kodegrenade/mygra';
 
   public function __construct()
   {
-    parent::__construct(self::NAME, self::VERSION);
+    parent::__construct(self::NAME, self::version());
 
     $this->registerCommands();
+  }
+
+  /**
+   * The installed version, from the git tag Composer installed (or 'dev-main' from a clone),
+   * so it never needs bumping by hand.
+   */
+  public static function version(): string
+  {
+    if (InstalledVersions::isInstalled(self::PACKAGE)) {
+      return InstalledVersions::getPrettyVersion(self::PACKAGE) ?? 'unknown';
+    }
+    return 'unknown';
   }
 
   /**
@@ -42,51 +54,10 @@ class Application extends SymfonyApplication
       new InspectCommand(),
       new ValidateCommand(),
       new InitCommand(),
-      new RollbackCommand(),
       new CompareCommand(),
       new SuggestCommand(),
+      new VerifyCommand(),
+      new FinishCommand(),
     ]);
-  }
-
-  /**
-   * Get the application logo/banner.
-   */
-  public function getLongVersion(): string
-  {
-    return sprintf(
-      '<info>%s</info> <comment>v%s</comment> - Universal Database Migration Tool',
-      self::NAME,
-      self::VERSION
-    );
-  }
-
-  /**
-   * Override to add custom banner.
-   */
-  public function doRun(InputInterface $input, OutputInterface $output): int
-  {
-    if ($input->hasParameterOption(['--version', '-V'], true)) {
-      $output->writeln($this->getBanner());
-    }
-
-    return parent::doRun($input, $output);
-  }
-
-  /**
-   * Get ASCII banner.
-   */
-  private function getBanner(): string
-  {
-    return <<<BANNER
-<fg=cyan>
-  __  __                       
- |  \/  |_   _  __ _ _ __ __ _ 
- | |\/| | | | |/ _` | '__/ _` |
- | |  | | |_| | (_| | | | (_| |
- |_|  |_|\__, |\__, |_|  \__,_|
-         |___/ |___/           
-</>
-<info>Universal Database Migration Tool</info> <comment>v1.0.0</comment>
-BANNER;
   }
 }

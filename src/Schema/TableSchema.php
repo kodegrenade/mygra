@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Mygra\Schema;
 
+use Mygra\Adapters\AdapterInterface;
+
 /**
  * Table Schema
- * 
+ *
  * Represents the complete schema of a database table including
  * columns, primary key, foreign keys, and indexes.
  */
@@ -24,7 +26,7 @@ class TableSchema
     public readonly array $columns = [],
     public readonly string|array|null $primaryKey = null,
     public readonly array $foreignKeys = [],
-    public readonly array $indexes = []
+    public readonly array $indexes = [],
   ) {}
 
   /**
@@ -52,25 +54,6 @@ class TableSchema
   }
 
   /**
-   * Get columns that are nullable.
-   */
-  public function getNullableColumns(): array
-  {
-    return array_filter($this->columns, fn($col) => $col->nullable);
-  }
-
-  /**
-   * Get columns that are required (not nullable and no default).
-   */
-  public function getRequiredColumns(): array
-  {
-    return array_filter(
-      $this->columns,
-      fn($col) => !$col->nullable && $col->default === null && !$col->isAutoIncrement
-    );
-  }
-
-  /**
    * Get the primary key column(s) as array.
    */
   public function getPrimaryKeyColumns(): array
@@ -79,41 +62,6 @@ class TableSchema
       return [];
     }
     return is_array($this->primaryKey) ? $this->primaryKey : [$this->primaryKey];
-  }
-
-  /**
-   * Check if table has a composite primary key.
-   */
-  public function hasCompositePrimaryKey(): bool
-  {
-    return is_array($this->primaryKey) && count($this->primaryKey) > 1;
-  }
-
-  /**
-   * Get foreign key for a specific column.
-   */
-  public function getForeignKeyForColumn(string $column): ?array
-  {
-    foreach ($this->foreignKeys as $fk) {
-      if ($fk['column'] === $column) {
-        return $fk;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Convert to array representation.
-   */
-  public function toArray(): array
-  {
-    return [
-      'name' => $this->name,
-      'columns' => array_map(fn($col) => $col->toArray(), $this->columns),
-      'primaryKey' => $this->primaryKey,
-      'foreignKeys' => $this->foreignKeys,
-      'indexes' => $this->indexes,
-    ];
   }
 
   /**
@@ -132,16 +80,17 @@ class TableSchema
       columns: $columns,
       primaryKey: $data['primaryKey'] ?? null,
       foreignKeys: $data['foreignKeys'] ?? [],
-      indexes: $data['indexes'] ?? []
+      indexes: $data['indexes'] ?? [],
     );
   }
 
   /**
    * Generate a CREATE TABLE statement for this schema.
    */
-  public function toCreateTableSQL(string $driver = 'mysql'): string
+  public function toCreateTableSQL(AdapterInterface $adapter): string
   {
-    $driver = strtolower($driver);
+    // The adapter's name, not PDO's: over FreeTDS PDO says 'dblib' for a SQL Server connection
+    $driver = $adapter->getDriverName();
     $lines = [];
 
     foreach ($this->columns as $col) {
@@ -158,7 +107,7 @@ class TableSchema
         $typeStr .= "({$length})";
       }
 
-      $line = "  " . $this->quoteIdentifier($col->name, $driver) . " {$typeStr}";
+      $line = '  ' . $adapter->quoteIdentifier($col->name) . " {$typeStr}";
 
       if (!$col->nullable) {
         $line .= ' NOT NULL';
@@ -190,24 +139,14 @@ class TableSchema
     // Add primary key
     if ($this->primaryKey) {
       $pkCols = is_array($this->primaryKey) ? $this->primaryKey : [$this->primaryKey];
-      $quotedPkCols = array_map(fn($c) => $this->quoteIdentifier($c, $driver), $pkCols);
+      $quotedPkCols = array_map(fn($c) => $adapter->quoteIdentifier($c), $pkCols);
       $pkList = implode(', ', $quotedPkCols);
       $lines[] = "  PRIMARY KEY ({$pkList})";
     }
 
     $columnDefs = implode(",\n", $lines);
-    $tableName = $this->quoteIdentifier($this->name, $driver);
+    $tableName = $adapter->quoteTable($this->name);
 
     return "CREATE TABLE {$tableName} (\n{$columnDefs}\n);";
-  }
-
-  private function quoteIdentifier(string $identifier, string $driver): string
-  {
-    return match ($driver) {
-      'mysql' => "`{$identifier}`",
-      'pgsql', 'sqlite' => "\"{$identifier}\"",
-      'sqlsrv' => "[{$identifier}]",
-      default => "`{$identifier}`",
-    };
   }
 }

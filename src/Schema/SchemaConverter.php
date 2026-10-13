@@ -8,7 +8,7 @@ use Mygra\Config\SchemaConfig;
 
 /**
  * Schema Converter
- * 
+ *
  * Converts a source TableSchema into a target TableSchema
  * according to the provided SchemaConfig and field mappings.
  */
@@ -16,8 +16,10 @@ class SchemaConverter
 {
   /**
    * Convert a source schema to a target schema.
+   *
+   * @param array<string, TableSchema> $joinSchemas Source schemas of joined tables, keyed by table name
    */
-  public function convert(TableSchema $sourceSchema, SchemaConfig $config): TableSchema
+  public function convert(TableSchema $sourceSchema, SchemaConfig $config, array $joinSchemas = []): TableSchema
   {
     $targetColumns = [];
     $targetPrimaryKey = null;
@@ -44,7 +46,7 @@ class SchemaConverter
         isAutoIncrement: $sourceColumn->isAutoIncrement,
         isUnique: $sourceColumn->isUnique,
         comment: $sourceColumn->comment,
-        extra: $sourceColumn->extra
+        extra: $sourceColumn->extra,
       );
 
       if ($sourceColumn->isPrimaryKey) {
@@ -58,12 +60,43 @@ class SchemaConverter
       }
     }
 
+    $targetColumns += $this->joinColumns($config->joins, $joinSchemas);
+
     return new TableSchema(
       name: $config->targetTable,
       columns: $targetColumns,
       primaryKey: $targetPrimaryKey,
       foreignKeys: [], // Skip foreign keys for now to simplify initial creation
-      indexes: []     // Skip indexes for now
+      indexes: [],     // Skip indexes for now
     );
+  }
+
+  /**
+   * Target columns for join fields. Always nullable, since a join may not match.
+   */
+  private function joinColumns(array $joins, array $joinSchemas): array
+  {
+    $columns = [];
+
+    foreach ($joins as $join) {
+      foreach ($join['fields'] as $sourceField => $targetField) {
+        $col = ($joinSchemas[$join['table']] ?? null)?->getColumn($sourceField);
+        if (!$col) {
+          continue;
+        }
+
+        $columns[$targetField] = new ColumnSchema(
+          name: $targetField,
+          type: $col->type,
+          nativeType: $col->nativeType,
+          length: $col->length,
+          precision: $col->precision,
+          scale: $col->scale,
+        );
+      }
+      $columns += $this->joinColumns($join['join'], $joinSchemas);
+    }
+
+    return $columns;
   }
 }

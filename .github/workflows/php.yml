@@ -1,36 +1,162 @@
-name: PHP Composer
+name: CI
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+  # Weekly, so a new release of a dependency that breaks Mygra shows up even without commits
+  schedule:
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
 
-jobs:
-  build:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
+  quality:
+    name: Code style and static analysis
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
 
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: "8.4"
+        extensions: pdo_mysql, pdo_pgsql, pdo_sqlite
+        coverage: none
+
     - name: Validate composer.json and composer.lock
       run: composer validate --strict
 
     - name: Cache Composer packages
-      id: composer-cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: vendor
-        key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-php-
+        key: ${{ runner.os }}-php8.4-${{ hashFiles('composer.lock') }}
 
     - name: Install dependencies
       run: composer install --prefer-dist --no-progress
 
-    - name: Run test suite
-      run: composer run-script test
+    - name: Code style
+      run: composer cs
+
+    - name: Static analysis
+      run: composer analyse
+
+  dependency-range:
+    # composer.lock pins one set of versions; people who `composer require` Mygra get whatever their
+    # project resolves to. Test both ends of the ranges in composer.json, ignoring the lock.
+    name: Dependencies (${{ matrix.deps }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - deps: lowest
+            php: "8.1"
+            flags: --prefer-lowest --prefer-stable
+          - deps: highest
+            php: "8.5"
+            flags: ""
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ matrix.php }}
+        extensions: pdo_sqlite
+        coverage: none
+
+    - name: Resolve ${{ matrix.deps }} versions
+      run: |
+        composer config --unset platform.php
+        composer update ${{ matrix.flags }} --no-interaction --no-progress
+
+    - name: Unit tests
+      run: vendor/bin/phpunit --testsuite unit
+
+  tests:
+    name: Tests (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: [ "8.1", "8.2", "8.3", "8.4", "8.5" ]
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: secret
+          MYSQL_DATABASE: mygra_it
+        ports: [ "3306:3306" ]
+        options: >-
+          --health-cmd="mysqladmin ping -psecret"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: mygra_it
+        ports: [ "5432:5432" ]
+        options: >-
+          --health-cmd=pg_isready
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+      sqlsrv:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Mygra_it_Secret1"
+        ports: [ "1433:1433" ]
+        options: >-
+          --health-cmd="/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Mygra_it_Secret1 -C -Q 'SELECT 1'"
+          --health-interval=10s --health-timeout=5s --health-retries=20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Microsoft ODBC Driver 18 (needed by pdo_sqlsrv)
+      run: |
+        sudo apt-get update
+        if ! sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18; then
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          curl -fsSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+        fi
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ matrix.php }}
+        extensions: pdo_mysql, pdo_pgsql, pdo_sqlite, pdo_sqlsrv
+        coverage: none
+
+    - name: Cache Composer packages
+      uses: actions/cache@v4
+      with:
+        path: vendor
+        key: ${{ runner.os }}-php${{ matrix.php }}-${{ hashFiles('composer.lock') }}
+
+    - name: Install dependencies
+      run: composer install --prefer-dist --no-progress
+
+    - name: Unit and integration tests
+      env:
+        MYGRA_TEST_MYSQL: '{"driver":"mysql","host":"127.0.0.1","database":"mygra_it","user":"root","password":"secret"}'
+        MYGRA_TEST_PGSQL: '{"driver":"pgsql","host":"127.0.0.1","database":"mygra_it","user":"postgres","password":"secret"}'
+        MYGRA_TEST_SQLSRV: '{"driver":"sqlsrv","pdo_driver":"sqlsrv","host":"127.0.0.1","database":"master","user":"sa","password":"Mygra_it_Secret1","trust_server_certificate":true}'
+      run: vendor/bin/phpunit --fail-on-skipped

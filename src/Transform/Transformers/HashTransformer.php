@@ -8,7 +8,7 @@ use Mygra\Transform\TransformerInterface;
 
 /**
  * Hash Transformer
- * 
+ *
  * Hashes values using various algorithms (for passwords, checksums, etc.).
  */
 class HashTransformer implements TransformerInterface
@@ -18,14 +18,9 @@ class HashTransformer implements TransformerInterface
     return 'hash';
   }
 
-  public function getDescription(): string
+  public function getOptionNames(): array
   {
-    return 'Hash values using various algorithms (md5, sha256, bcrypt, etc.)';
-  }
-
-  public function supports(string $type): bool
-  {
-    return true; // Can hash any value
+    return ['algorithm', 'cost'];
   }
 
   public function transform(mixed $value, array $context = []): mixed

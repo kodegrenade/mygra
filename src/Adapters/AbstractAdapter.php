@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * Abstract Database Adapter
- * 
+ *
  * Provides common functionality for all database adapters.
  * Concrete adapters should extend this class and implement driver-specific methods.
  */
@@ -19,25 +19,21 @@ abstract class AbstractAdapter implements AdapterInterface
   protected array $config = [];
   protected string $driver = '';
 
+  /** Most parameters one statement may bind (MySQL and PostgreSQL: 65535) */
+  protected int $maxParams = 65535;
+
+  /** Most rows one multi-row INSERT may hold */
+  protected int $maxRowsPerInsert = PHP_INT_MAX;
+
   // =========================================================================
   // Connection Management
   // =========================================================================
 
   abstract public function connect(array $config): void;
 
-  public function disconnect(): void
+  protected function getPdo(): \PDO
   {
-    $this->pdo = null;
-  }
-
-  public function isConnected(): bool
-  {
-    return $this->pdo !== null;
-  }
-
-  public function getPdo(): \PDO
-  {
-    if (!$this->isConnected()) {
+    if ($this->pdo === null) {
       throw new \RuntimeException('Not connected to database');
     }
     return $this->pdo;
@@ -77,10 +73,10 @@ abstract class AbstractAdapter implements AdapterInterface
 
   abstract public function getTables(): array;
   abstract public function getTableSchema(string $table): TableSchema;
-  abstract public function getColumns(string $table): array;
+  abstract protected function getColumns(string $table): array;
   abstract public function getPrimaryKey(string $table): string|array|null;
   abstract public function getForeignKeys(string $table): array;
-  abstract public function getIndexes(string $table): array;
+  abstract protected function getIndexes(string $table): array;
 
   // =========================================================================
   // Transaction Support
@@ -106,73 +102,100 @@ abstract class AbstractAdapter implements AdapterInterface
     return $this->getPdo()->inTransaction();
   }
 
-  public function savepoint(string $name): void
-  {
-    $this->execute("SAVEPOINT " . $this->quoteIdentifier($name));
-  }
-
-  public function rollbackToSavepoint(string $name): void
-  {
-    $this->execute("ROLLBACK TO SAVEPOINT " . $this->quoteIdentifier($name));
-  }
-
-  public function releaseSavepoint(string $name): void
-  {
-    $this->execute("RELEASE SAVEPOINT " . $this->quoteIdentifier($name));
-  }
-
   // =========================================================================
   // Batch Operations
   // =========================================================================
 
   public function batchInsert(string $table, array $columns, array $rows): int
   {
-    if (empty($rows)) {
+    return $this->writeRows($this->quoteTable($table), $columns, $rows, '');
+  }
+
+  public function batchUpsert(string $table, array $columns, array $rows, array $keyColumns): int
+  {
+    return $this->writeRows($this->quoteTable($table), $columns, $rows, $this->upsertClause($columns, $keyColumns));
+  }
+
+  /**
+   * INSERT ... VALUES in chunks that stay under the driver's parameter limit, plus an optional trailing clause.
+   */
+  protected function writeRows(string $quotedTable, array $columns, array $rows, string $suffix): int
+  {
+    if (!$rows) {
       return 0;
     }
 
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    // Build placeholders for each row
+    $columnList = implode(', ', array_map([$this, 'quoteIdentifier'], $columns));
     $placeholderRow = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
-    $placeholders = implode(', ', array_fill(0, count($rows), $placeholderRow));
 
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}";
+    $total = 0;
+    foreach (array_chunk($rows, $this->insertChunkSize(count($columns))) as $chunk) {
+      $placeholders = implode(', ', array_fill(0, count($chunk), $placeholderRow));
+      $total += $this->execute("INSERT INTO {$quotedTable} ({$columnList}) VALUES {$placeholders}{$suffix}", $this->rowValues($chunk, $columns));
+    }
+    return $total;
+  }
 
-    // Flatten the rows array for binding
+  /**
+   * ON CONFLICT upsert (PostgreSQL, SQLite 3.24+): update every non-key column in place.
+   * SQLite's INSERT OR REPLACE is avoided on purpose: it deletes the row, firing ON DELETE CASCADE.
+   */
+  protected function upsertClause(array $columns, array $keyColumns): string
+  {
+    $q = [$this, 'quoteIdentifier'];
+    $updates = array_map(fn($c) => "{$q($c)} = EXCLUDED.{$q($c)}", array_diff($columns, $keyColumns));
+    return ' ON CONFLICT (' . implode(', ', array_map($q, $keyColumns)) . ') '
+      . ($updates ? 'DO UPDATE SET ' . implode(', ', $updates) : 'DO NOTHING');
+  }
+
+  /**
+   * Row values flattened in column order, for binding.
+   */
+  protected function rowValues(array $rows, array $columns): array
+  {
     $values = [];
     foreach ($rows as $row) {
       foreach ($columns as $col) {
         $values[] = $row[$col] ?? null;
       }
     }
+    return $values;
+  }
 
-    return $this->execute($sql, $values);
+  /**
+   * Rows per INSERT that keep rows x columns under the driver's parameter limit (wide tables).
+   */
+  protected function insertChunkSize(int $columnCount): int
+  {
+    return max(1, min($this->maxRowsPerInsert, intdiv($this->maxParams, $columnCount)));
   }
 
   public function getRowCount(string $table, ?string $where = null): int
   {
-    $sql = "SELECT COUNT(*) as cnt FROM " . $this->quoteIdentifier($table);
+    $sql = 'SELECT COUNT(*) as cnt FROM ' . $this->quoteTable($table);
     if ($where !== null) {
-      $sql .= " WHERE " . $where;
+      $sql .= ' WHERE ' . $where;
     }
 
     $result = $this->query($sql);
     return (int) ($result[0]['cnt'] ?? 0);
   }
 
-  public function getLastInsertId(?string $sequenceName = null): string|false
+  public function syncSequences(string $table): void
   {
-    return $this->getPdo()->lastInsertId($sequenceName);
+    // MySQL, SQLite and SQL Server advance their counters past explicit IDs on insert
+  }
+
+  public function reserveIds(string $table, int $next): void
+  {
+    // ponytail: no-op for SQLite (rowid = max + 1); add sqlite_sequence handling if a live SQLite target ever matters
   }
 
   // =========================================================================
   // Utility Methods
   // =========================================================================
 
-  public function quote(string $value): string
+  protected function quote(string $value): string
   {
     return $this->getPdo()->quote($value);
   }
@@ -185,19 +208,24 @@ abstract class AbstractAdapter implements AdapterInterface
     return '`' . $identifier . '`';
   }
 
+  public function quoteTable(string $table): string
+  {
+    return $this->quoteIdentifier($table);
+  }
+
+  public function limit(string $sql, int $count): string
+  {
+    return "{$sql} LIMIT {$count}";
+  }
+
   public function getDriverName(): string
   {
     return $this->driver;
   }
 
-  public function getPlaceholderStyle(): string
-  {
-    return 'positional'; // Default to ? style placeholders
-  }
-
-    // =========================================================================
-    // Helper Methods
-    // =========================================================================
+  // =========================================================================
+  // Helper Methods
+  // =========================================================================
 
   /**
    * Build a TableSchema from column data.
@@ -221,7 +249,7 @@ abstract class AbstractAdapter implements AdapterInterface
       columns: $columns,
       primaryKey: $primaryKey,
       foreignKeys: $this->getForeignKeys($table),
-      indexes: $this->getIndexes($table)
+      indexes: $this->getIndexes($table),
     );
   }
 

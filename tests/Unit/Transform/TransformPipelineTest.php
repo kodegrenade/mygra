@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Mygra\Tests\Unit\Transform;
 
-use PHPUnit\Framework\TestCase;
-use Mygra\Transform\TransformPipeline;
 use Mygra\Transform\Transformers\DateTransformer;
+use Mygra\Transform\TransformPipeline;
+use PHPUnit\Framework\TestCase;
 
 class TransformPipelineTest extends TestCase
 {
@@ -16,13 +16,13 @@ class TransformPipelineTest extends TestCase
 
     $batch = [
       ['username' => 'testuser', 'email' => 'TEST@EXAMPLE.COM', 'status' => '1'],
-      ['username' => 'admin', 'email' => 'ADMIN@MYGRA.APP', 'status' => '0']
+      ['username' => 'admin', 'email' => 'ADMIN@MYGRA.APP', 'status' => '0'],
     ];
 
     $mappings = [
       'username' => 'user_login',
       'email' => 'user_email',
-      'status' => 'user_status'
+      'status' => 'user_status',
     ];
 
     $pipeline->forField('user_email', [['string' => ['case' => 'lower']]]);
@@ -48,5 +48,25 @@ class TransformPipelineTest extends TestCase
 
     $this->assertEquals('2023-10-27', $transformer->transform('2023-10-27 15:30:00', $options));
     $this->assertEquals('2023-01-01', $transformer->transform(1672531200, $options));
+  }
+
+  public function testColumnsNamedLikeOptionsDoNotBecomeOptions()
+  {
+    $pipeline = TransformPipeline::withDefaults();
+    $pipeline->forField('name', ['string']);
+    $pipeline->forField('qty', [['typecast' => ['type' => 'int']]]);
+
+    $row = ['name' => 'ada', 'prefix' => 'DR. ', 'qty' => '7', 'type' => 'bool'];
+    $result = $pipeline->process($row, ['name' => 'name', 'qty' => 'qty']);
+
+    $this->assertSame(['name' => 'ada', 'qty' => 7], $result);
+  }
+
+  public function testStringOptionsApplyAlongsideListedOperations()
+  {
+    $pipeline = TransformPipeline::withDefaults();
+    $pipeline->forField('username', [['string' => ['operations' => ['trim'], 'case' => 'lower', 'max_length' => 3]]]);
+
+    $this->assertSame(['username' => 'ada'], $pipeline->process(['u' => '  ADALOVELACE '], ['u' => 'username']));
   }
 }

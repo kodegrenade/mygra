@@ -8,24 +8,21 @@ use Mygra\Transform\TransformerInterface;
 
 /**
  * Type Cast Transformer
- * 
+ *
  * Casts values to specific PHP types.
  */
 class TypeCastTransformer implements TransformerInterface
 {
+  public const TYPES = ['int', 'integer', 'float', 'double', 'decimal', 'string', 'bool', 'boolean', 'array'];
+
   public function getName(): string
   {
     return 'typecast';
   }
 
-  public function getDescription(): string
+  public function getOptionNames(): array
   {
-    return 'Cast values to specific types (int, float, string, bool, array)';
-  }
-
-  public function supports(string $type): bool
-  {
-    return in_array(strtolower($type), ['int', 'integer', 'float', 'double', 'string', 'bool', 'boolean', 'array']);
+    return ['type', 'preserve_null'];
   }
 
   public function transform(mixed $value, array $context = []): mixed
@@ -42,7 +39,7 @@ class TypeCastTransformer implements TransformerInterface
       'string' => (string) $value,
       'bool', 'boolean' => $this->toBoolean($value),
       'array' => (array) $value,
-      default => $value,
+      default => throw new \InvalidArgumentException("Unknown typecast type '{$type}'; use one of: " . implode(', ', self::TYPES)),
     };
   }
 

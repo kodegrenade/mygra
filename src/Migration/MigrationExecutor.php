@@ -6,479 +6,353 @@ namespace Mygra\Migration;
 
 use Mygra\Adapters\AdapterInterface;
 use Mygra\Config\SchemaConfig;
-use Mygra\Transform\TransformPipeline;
-use Mygra\Logger\LoggerInterface;
-use Mygra\Logger\NullLogger;
+use Mygra\Schema\ColumnSchema;
 use Mygra\Schema\SchemaConverter;
+use Mygra\Schema\TableSchema;
+use Mygra\Transform\TransformPipeline;
 use Mygra\Validation\ValidationRunner;
-use Mygra\Transaction\TransactionManager;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 /**
- * Migration Executor
- * 
- * The core engine that executes database migrations.
- * Handles data extraction, transformation, and loading with
- * support for batching, streaming, and transaction management.
+ * Migrates one schema at a time: read source rows (SourceReader), prepare them (RowPreparer),
+ * map IDs and references (IdMapper), and write them in batches.
+ *
+ * Transaction modes:
+ *   per_batch (default): each batch commits on its own; a rerun can resume after the last one
+ *   single: the whole schema is one transaction; any failure leaves nothing behind
  */
-class MigrationExecutor
+final class MigrationExecutor
 {
-  private AdapterInterface $source;
-  private AdapterInterface $target;
-  private TransformPipeline $pipeline;
-  private ValidationRunner $validator;
-  private ?TransactionManager $transactionManager = null;
-  private LoggerInterface $logger;
-
   private int $batchSize = 1000;
   private bool $dryRun = false;
-  private bool $useTransactions = true;
-  private int $savepointInterval = 10000;
-  private array $options = [];
+  private RunOptions $options;
 
-  /** @var callable|null */
-  private $progressCallback = null;
+  /** @var array<string, SchemaConfig> All schemas, so references can find their parent */
+  private array $schemas = [];
+
+  private readonly RowPreparer $preparer;
+  private readonly LoggerInterface $logger;
+
+  /** Built on first use from the current settings; reset when they change */
+  private ?OffsetStore $offsets = null;
+  private ?IdMapper $mapper = null;
+
+  /** @var (callable(int $processed, int $total): void)|null */
+  private $progress = null;
+
   public function __construct(
-    AdapterInterface $source,
-    AdapterInterface $target,
+    private readonly AdapterInterface $source,
+    private readonly AdapterInterface $target,
     ?TransformPipeline $pipeline = null,
     ?ValidationRunner $validator = null,
-    ?TransactionManager $transactionManager = null,
-    ?LoggerInterface $logger = null
+    ?LoggerInterface $logger = null,
   ) {
-    $this->source = $source;
-    $this->target = $target;
-    $this->pipeline = $pipeline ?? TransformPipeline::withDefaults();
-    $this->validator = $validator ?? ValidationRunner::withDefaults();
-    $this->transactionManager = $transactionManager ?? new TransactionManager($this->target, null, $logger);
+    $this->preparer = new RowPreparer($pipeline ?? TransformPipeline::withDefaults(), $validator ?? ValidationRunner::withDefaults());
     $this->logger = $logger ?? new NullLogger();
+    $this->options = new RunOptions();
   }
 
-  /**
-   * Set batch size for processing.
-   */
   public function setBatchSize(int $size): self
   {
     $this->batchSize = max(1, $size);
-    return $this;
+    return $this->reset();
   }
 
-  /**
-   * Enable/disable dry run mode.
-   */
   public function setDryRun(bool $dryRun): self
   {
     $this->dryRun = $dryRun;
-    return $this;
+    return $this->reset();
   }
 
   /**
-   * Enable/disable transaction wrapping.
-   */
-  public function setUseTransactions(bool $use): self
-  {
-    $this->useTransactions = $use;
-    return $this;
-  }
-
-  /**
-   * Set the interval for creating savepoints (in rows).
-   */
-  public function setSavepointInterval(int $interval): self
-  {
-    $this->savepointInterval = $interval;
-    return $this;
-  }
-
-  /**
-   * Set progress callback for tracking.
+   * Make all configured schemas known, so `references` can resolve their parent schema.
    *
-   * @param callable $callback Function(int $processed, int $total, string $status)
+   * @param SchemaConfig[] $schemas
+   */
+  public function setSchemas(array $schemas): self
+  {
+    foreach ($schemas as $schema) {
+      $this->schemas[$schema->name] = $schema;
+    }
+    return $this->reset();
+  }
+
+  /**
+   * @param array<string, mixed> $options create_target, on_error, transaction_mode, resume, upsert
+   */
+  public function setOptions(array $options): self
+  {
+    $this->options = RunOptions::fromArray($options, $this->options);
+    return $this;
+  }
+
+  /**
+   * @param callable(int $processed, int $total): void $callback Called after each batch
    */
   public function onProgress(callable $callback): self
   {
-    $this->progressCallback = $callback;
+    $this->progress = $callback;
     return $this;
   }
 
-  /**
-   * Get the transform pipeline.
-   */
-  public function getPipeline(): TransformPipeline
-  {
-    return $this->pipeline;
-  }
-
-  /**
-   * Execute the migration for a schema.
-   */
   public function execute(SchemaConfig $schema): MigrationResult
   {
     $result = new MigrationResult($schema->name);
     $startTime = microtime(true);
+    $options = $this->options->forSchema($schema);
+    $errorCount = 0;
 
-    $this->logger->info("Starting migration: {$schema->name}");
-    $this->logger->info("Source: {$schema->sourceTable} -> Target: {$schema->targetTable}");
+    $this->logger->info("Migrating {$schema->name}: {$schema->sourceTable} -> {$schema->targetTable}");
 
     try {
-      // Ensure target table exists
-      if ($this->shouldCreateTarget($schema)) {
-        $this->ensureTargetTableExists($schema);
+      if ($options->createTarget) {
+        $this->createTargetTable($schema);
       }
 
-      // Build the SELECT query
-      $query = $this->buildSelectQuery($schema);
-      $this->logger->debug("Query: {$query}");
+      // New IDs and references must be settled before anything is read or written
+      $ids = $this->mapper()->context($schema, true);
+      if ($ids->offset !== null) {
+        $result->setMetadata('id_offset', $ids->offset);
+      }
+      if ($ids->kind === 'uuid') {
+        $result->setMetadata('id_uuid', "UUIDv5 of '{$schema->sourceTable}:<old id>'");
+      }
 
-      // Get total count for progress tracking
-      $totalRows = $this->source->getRowCount($schema->sourceTable, $schema->where);
-      $this->logger->info("Total rows to migrate: {$totalRows}");
+      $after = $options->resume ? $this->mapper()->lastMigratedKey($schema, $ids) : null;
+      if ($after !== null) {
+        $this->logger->info("Resuming {$schema->name} after key {$after}");
+      }
+
+      $reader = $this->reader();
+      $totalRows = $reader->count($schema, $after);
       $result->setTotalRows($totalRows);
+      $this->preparer->use($schema);
 
-      // Configure field transformations
-      $this->configureTransforms($schema);
+      // Upsert (final sync): rows already in the target are updated instead of failing on their key
+      $upsertKeys = $options->upsert
+        ? (array) ($this->target->getPrimaryKey($schema->targetTable)
+          ?? throw new \InvalidArgumentException("Upsert needs a primary key on target table '{$schema->targetTable}'"))
+        : null;
 
-      // Begin transaction if enabled
-      if ($this->useTransactions && !$this->dryRun) {
-        $this->transactionManager->begin();
+      if ($options->transactionMode === 'single' && !$this->dryRun) {
+        $this->target->beginTransaction();
       }
 
-      $processedCount = 0;
-      $insertedCount = 0;
-      $errorCount = 0;
+      $written = $processed = $replaced = 0;
+
+      // Row errors (transform, validation, missing reference) skip the row or abort the schema;
+      // write errors always fail it
+      $rowError = function (array $row, string $message) use (&$errorCount, $result, $options): void {
+        $errorCount++;
+        $result->addError(['row' => $row, 'error' => $message]);
+        $this->logger->warning("Row error: {$message}");
+        if ($options->abortsOnRowError()) {
+          throw new \RuntimeException("Migration aborted on row error: {$message}");
+        }
+      };
+
+      $load = function (array $batch) use ($schema, $ids, $rowError, $upsertKeys, &$written, &$processed, &$replaced): void {
+        [$batch, $orphans, $replacedInBatch] = $this->mapper()->resolve($batch, $ids);
+        $replaced += $replacedInBatch;
+        foreach ($orphans as [$row, $message]) {
+          $rowError($row, $message);
+        }
+        $written += $this->write($schema->targetTable, $batch, $upsertKeys);
+        $processed += count($batch);
+      };
+
       $batch = [];
-      $savepointCount = 0;
+      foreach ($reader->rows($schema, $after) as $row) {
+        [$prepared, $error] = $this->preparer->prepare($row, $ids);
+        if ($error !== null) {
+          $rowError($row, $error);
+          continue;
+        }
 
-      // Stream rows from source
-      foreach ($this->source->streamQuery($query) as $row) {
-        try {
-          // Transform the row
-          $transformed = $this->pipeline->process($row, $schema->fields);
-
-          // Validate the transformed row
-          if (!empty($schema->validations)) {
-            $validation = $this->validator->validateRow($transformed, $schema->validations);
-            if (!$validation->isValid()) {
-              $errorCount++;
-              $errorMsg = "Validation failed: " . $validation->getFormattedErrors();
-              $result->addError([
-                'row' => $row,
-                'error' => $errorMsg,
-              ]);
-              $this->logger->warning("Row validation error: {$errorMsg}");
-
-              $onError = $schema->getOption('on_error', $this->options['on_error'] ?? 'skip');
-              if ($onError === 'abort') {
-                throw new \Exception("Migration aborted due to validation error: {$errorMsg}");
-              }
-
-              continue; // Skip this row
-            }
+        $batch[] = $prepared;
+        if (count($batch) >= $this->batchSize) {
+          $load($batch);
+          $batch = [];
+          if ($this->progress) {
+            ($this->progress)($processed, $totalRows);
           }
-
-          $batch[] = $transformed;
-
-          // Flush batch when full
-          if (count($batch) >= $this->batchSize) {
-            $inserted = $this->flushBatch($schema->targetTable, $batch);
-
-            // Record batch in journal if primary key is available
-            $this->recordBatchInJournal($schema, $batch);
-
-            $insertedCount += $inserted;
-            $processedCount += count($batch);
-            $batch = [];
-
-            // Report progress
-            $this->reportProgress($processedCount, $totalRows, "Processing...");
-
-            // Create savepoint at intervals
-            if (
-              $this->useTransactions && !$this->dryRun &&
-              $processedCount % $this->savepointInterval === 0
-            ) {
-              $this->transactionManager->checkpoint();
-            }
-          }
-        } catch (\Exception $e) {
-          $errorCount++;
-          $result->addError([
-            'row' => $row,
-            'error' => $e->getMessage(),
-          ]);
-          $this->logger->warning("Row error: {$e->getMessage()}");
         }
       }
-
-      // Flush remaining batch
-      if (!empty($batch)) {
-        $inserted = $this->flushBatch($schema->targetTable, $batch);
-        $this->recordBatchInJournal($schema, $batch);
-        $insertedCount += $inserted;
-        $processedCount += count($batch);
+      if ($batch) {
+        $load($batch);
       }
 
-      // Commit transaction
-      if ($this->useTransactions && !$this->dryRun) {
-        $this->transactionManager->commit();
+      if ($this->target->inTransaction()) {
+        $this->target->commit();
+      }
+      if (!$this->dryRun) {
+        $this->target->syncSequences($schema->targetTable);
+      }
+
+      if ($replaced > 0) {
+        $result->addWarning("Dead IDs inside text replaced: {$replaced} (on_missing: replace)");
       }
 
       $result->setSuccess(true);
-      $result->setProcessedRows($processedCount);
-      $result->setInsertedRows($insertedCount);
-      $result->setErrorCount($errorCount);
-    } catch (\Exception $e) {
-      // Rollback on error
-      if ($this->useTransactions && !$this->dryRun) {
-        $this->transactionManager->rollback();
+      $result->setInsertedRows($written);
+    } catch (\Throwable $e) {
+      // single: undo the schema. per_batch: undo the failed batch; committed batches stay (rerun with --resume)
+      if ($this->target->inTransaction()) {
+        $this->target->rollback();
+      }
+
+      // per_batch keeps committed rows; the application must still be able to insert after them
+      if (!$this->dryRun) {
+        try {
+          $this->target->syncSequences($schema->targetTable);
+        } catch (\Throwable $syncError) {
+          $this->logger->warning("Could not sync sequences: {$syncError->getMessage()}");
+        }
       }
 
       $result->setSuccess(false);
       $result->setError($e->getMessage());
-      $this->logger->error("Migration failed: {$e->getMessage()}");
+      $this->logger->error("{$schema->name} failed: {$e->getMessage()}");
     }
 
-    $duration = microtime(true) - $startTime;
-    $result->setDuration($duration);
-
+    $result->setErrorCount($errorCount);
+    $result->setDuration(microtime(true) - $startTime);
     $this->logger->info(sprintf(
-      "Migration %s. Processed: %d, Inserted: %d, Errors: %d, Duration: %.2fs",
-      $result->isSuccess() ? 'completed' : 'failed',
-      $result->getProcessedRows(),
+      '%s %s: %d written, %d row errors, %.2fs',
+      $schema->name,
+      $result->isSuccess() ? 'done' : 'failed',
       $result->getInsertedRows(),
-      $result->getErrorCount(),
-      $duration
+      $errorCount,
+      $result->getDuration(),
     ));
 
     return $result;
   }
 
-  /**
-   * Build the SELECT query for extracting data.
-   */
-  private function buildSelectQuery(SchemaConfig $schema): string
+  public function verify(SchemaConfig $schema): VerificationResult
   {
-    $sourceTable = $schema->sourceTable;
-    $fields = array_keys($schema->fields);
-
-    // Build SELECT clause
-    $selectFields = array_map(
-      fn($field) => "{$sourceTable}.{$field}",
-      $fields
-    );
-
-    // Add join fields
-    $joinClauses = [];
-    if ($schema->hasJoins()) {
-      $this->buildJoins($sourceTable, $schema->joins, $selectFields, $joinClauses);
-    }
-
-    $selectClause = implode(', ', $selectFields);
-    $joinClause = implode(' ', $joinClauses);
-
-    $sql = "SELECT {$selectClause} FROM {$sourceTable} {$joinClause}";
-
-    // Add WHERE clause
-    if ($schema->where) {
-      $sql .= " WHERE {$schema->where}";
-    }
-
-    return $sql;
+    return (new Verifier($this->target, $this->reader(), $this->preparer, $this->mapper(), $this->batchSize))->verify($schema);
   }
 
   /**
-   * Build JOIN clauses recursively.
+   * Remove Mygra's ID bookkeeping from the target (`mygra finish`).
+   *
+   * @return bool Whether there was anything to remove
    */
-  private function buildJoins(
-    string $baseTable,
-    array $joins,
-    array &$selectFields,
-    array &$joinClauses,
-    int &$aliasCounter = 0
-  ): void {
-    foreach ($joins as $join) {
-      $alias = $join['table'] . '_' . (++$aliasCounter);
-      $joinType = $join['type'];
-      $sourceKey = $join['source_key'];
-      $targetKey = $join['target_key'];
-
-      $clause = "{$joinType} JOIN {$join['table']} AS {$alias} " .
-        "ON {$baseTable}.{$sourceKey} = {$alias}.{$targetKey}";
-
-      if (!empty($join['where'])) {
-        $clause .= " AND {$join['where']}";
-      }
-
-      $joinClauses[] = $clause;
-
-      // Add fields from this join
-      foreach ($join['fields'] as $srcField => $targetField) {
-        $selectFields[] = "{$alias}.{$srcField} AS {$targetField}";
-      }
-
-      // Handle nested joins
-      if (!empty($join['join'])) {
-        $this->buildJoins($alias, $join['join'], $selectFields, $joinClauses, $aliasCounter);
-      }
-    }
+  public function dropOffsets(): bool
+  {
+    return $this->offsets()->drop();
   }
 
   /**
-   * Configure transformations from schema config.
+   * @param string[]|null $upsertKeys Key columns to upsert on; null = plain insert
+   * @return int Rows written (inserted, or inserted/updated when upserting)
    */
-  private function configureTransforms(SchemaConfig $schema): void
+  private function write(string $table, array $rows, ?array $upsertKeys): int
   {
-    foreach ($schema->transforms as $field => $transforms) {
-      $this->pipeline->forField($field, $transforms);
-    }
-  }
-
-  /**
-   * Flush a batch of rows to the target database.
-   */
-  private function flushBatch(string $table, array $rows): int
-  {
-    if (empty($rows)) {
+    if (!$rows) {
       return 0;
     }
-
     if ($this->dryRun) {
-      $this->logger->debug("Dry run: Would insert " . count($rows) . " rows");
       return count($rows);
     }
 
     $columns = array_keys($rows[0]);
-    return $this->target->batchInsert($table, $columns, $rows);
-  }
+    $write = function () use ($table, $columns, $rows, $upsertKeys): int {
+      if ($upsertKeys === null) {
+        return $this->target->batchInsert($table, $columns, $rows);
+      }
+      // Drivers count upserted rows differently (MySQL counts an update as 2); report rows written
+      $this->target->batchUpsert($table, $columns, $rows, $upsertKeys);
+      return count($rows);
+    };
 
-  /**
-   * Report progress to callback if set.
-   */
-  private function reportProgress(int $processed, int $total, string $status): void
-  {
-    if ($this->progressCallback !== null) {
-      ($this->progressCallback)($processed, $total, $status);
+    // Inside a single-mode transaction already
+    if ($this->target->inTransaction()) {
+      return $write();
     }
+
+    // per_batch: the batch commits atomically, so resume never sees half a batch
+    $this->target->beginTransaction();
+    $written = $write();
+    $this->target->commit();
+    return $written;
   }
 
-  /**
-   * Should the target table be created if missing?
-   */
-  private function shouldCreateTarget(SchemaConfig $schema): bool
+  private function createTargetTable(SchemaConfig $schema): void
   {
-    return $schema->getOption('create_target', false) || ($this->options['auto_create'] ?? false);
-  }
-
-  /**
-   * Ensure the target table exists, creating it if necessary.
-   */
-  private function ensureTargetTableExists(SchemaConfig $schema): void
-  {
-    $targetTables = $this->target->getTables();
-    if (in_array($schema->targetTable, $targetTables)) {
+    if (in_array($schema->targetTable, $this->target->getTables(), true)) {
       return;
     }
-
-    $this->logger->info("Target table '{$schema->targetTable}' missing. Attempting to create...");
-
     if ($this->dryRun) {
-      $this->logger->info("Dry run: Would create table '{$schema->targetTable}'");
+      $this->logger->info("Dry run: would create table '{$schema->targetTable}'");
       return;
     }
 
-    // Get source schema
-    $sourceTableSchema = $this->source->getTableSchema($schema->sourceTable);
+    $joinSchemas = [];
+    foreach (self::joinTables($schema->joins) as $table) {
+      $joinSchemas[$table] = $this->source->getTableSchema($table);
+    }
+    $table = (new SchemaConverter())->convert($this->source->getTableSchema($schema->sourceTable), $schema, $joinSchemas);
+    $table = self::withUuidColumns($table, $this->mapper()->uuidColumns($schema));
 
-    // Convert to target schema
-    $converter = new SchemaConverter();
-    $targetTableSchema = $converter->convert($sourceTableSchema, $schema);
-
-    // Generate SQL
-    $driver = $this->target->getPdo()->getAttribute(\PDO::ATTR_DRIVER_NAME);
-    $sql = $targetTableSchema->toCreateTableSQL($driver);
-
+    $sql = $table->toCreateTableSQL($this->target);
     $this->logger->debug("Create SQL: {$sql}");
-
-    // Execute
     $this->target->execute($sql);
-    $this->logger->info("Target table '{$schema->targetTable}' created successfully.");
+    $this->logger->info("Created target table '{$schema->targetTable}'");
   }
 
   /**
-   * Set global options for the executor.
+   * Columns that will hold UUIDs get a UUID type instead of the source's integer type.
+   *
+   * @param string[] $uuidColumns
    */
-  public function setOptions(array $options): self
+  private static function withUuidColumns(TableSchema $table, array $uuidColumns): TableSchema
   {
-    $this->options = array_merge($this->options ?? [], $options);
+    if (!$uuidColumns) {
+      return $table;
+    }
+    $columns = $table->columns;
+    foreach ($uuidColumns as $name) {
+      if ($col = $columns[$name] ?? null) {
+        $columns[$name] = new ColumnSchema(name: $col->name, type: 'uuid', nullable: $col->nullable, isPrimaryKey: $col->isPrimaryKey);
+      }
+    }
+    return new TableSchema($table->name, $columns, $table->primaryKey, $table->foreignKeys, $table->indexes);
+  }
+
+  /**
+   * @return string[] Every table referenced by (nested) joins
+   */
+  private static function joinTables(array $joins): array
+  {
+    $tables = [];
+    foreach ($joins as $join) {
+      $tables = [...$tables, $join['table'], ...self::joinTables($join['join'] ?? [])];
+    }
+    return array_unique($tables);
+  }
+
+  private function reader(): SourceReader
+  {
+    return new SourceReader($this->source, $this->batchSize);
+  }
+
+  private function offsets(): OffsetStore
+  {
+    return $this->offsets ??= new OffsetStore($this->target, $this->dryRun);
+  }
+
+  private function mapper(): IdMapper
+  {
+    return $this->mapper ??= new IdMapper($this->source, $this->target, $this->reader(), $this->offsets(), $this->schemas, $this->logger, $this->dryRun);
+  }
+
+  private function reset(): self
+  {
+    $this->offsets = null;
+    $this->mapper = null;
     return $this;
-  }
-
-  /**
-   * Record a batch of inserts in the transaction journal.
-   */
-  private function recordBatchInJournal(SchemaConfig $schema, array $batch): void
-  {
-    if (!$this->transactionManager->getJournal() || empty($batch)) {
-      return;
-    }
-
-    // Try to determine primary key from target table
-    $targetSchema = $this->target->getTableSchema($schema->targetTable);
-    $pk = $targetSchema->primaryKey;
-
-    if (!$pk) {
-      return; // No primary key, can't reliably journal for rollback
-    }
-
-    $pkCols = is_array($pk) ? $pk : [$pk];
-    $primaryKeys = [];
-
-    foreach ($batch as $row) {
-      $keyData = [];
-      foreach ($pkCols as $col) {
-        if (!isset($row[$col])) {
-          return; // PK column missing in row, abort journaling for this batch
-        }
-        $keyData[$col] = $row[$col];
-      }
-      $primaryKeys[] = $keyData;
-    }
-
-    $this->transactionManager->recordBatch($schema->targetTable, $primaryKeys);
-  }
-
-  /**
-   * Recover from a failed/interrupted migration using the journal.
-   */
-  public function recovery(): void
-  {
-    if (!$this->transactionManager->needsRecovery()) {
-      $this->logger->info("No recovery needed.");
-      return;
-    }
-
-    $entries = $this->transactionManager->getJournal()->readEntries();
-    $this->logger->info("Starting recovery from journal (" . count($entries) . " entries)...");
-
-    foreach (array_reverse($entries) as $entry) {
-      if ($entry['type'] === 'BATCH_INSERT') {
-        $table = $entry['table'];
-        $keys = $entry['keys'];
-
-        $this->logger->info("Undoing batch insert in table '{$table}' (" . count($keys) . " rows)...");
-
-        foreach ($keys as $keyData) {
-          $conditions = [];
-          foreach ($keyData as $col => $val) {
-            $quotedVal = is_string($val) ? "'{$val}'" : $val;
-            $conditions[] = "{$this->target->quoteIdentifier($col)} = {$quotedVal}";
-          }
-          $sql = "DELETE FROM {$this->target->quoteIdentifier($table)} WHERE " . implode(' AND ', $conditions);
-          $this->target->execute($sql);
-        }
-      }
-    }
-
-    $this->transactionManager->getJournal()->complete();
-    $this->logger->info("Recovery completed successfully.");
   }
 }

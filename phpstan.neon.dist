@@ -1,0 +1,9 @@
+parameters:
+  level: 6
+  paths:
+    - src
+    - mygra
+  ignoreErrors:
+    # Config-derived arrays are shape-checked at load time by ConfigValidator; precise array
+    # shapes in signatures can follow incrementally without blocking CI.
+    - identifier: missingType.iterableValue

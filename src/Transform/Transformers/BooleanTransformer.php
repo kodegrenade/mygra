@@ -8,11 +8,13 @@ use Mygra\Transform\TransformerInterface;
 
 /**
  * Boolean Transformer
- * 
+ *
  * Converts various representations of boolean values.
  */
 class BooleanTransformer implements TransformerInterface
 {
+  public const OUTPUT_FORMATS = ['int', 'integer', 'bool', 'boolean', 'string', 'yes_no'];
+
   private array $defaultTrueValues = ['1', 'true', 'yes', 'on', 'y', 'active', 'enabled'];
   private array $defaultFalseValues = ['0', 'false', 'no', 'off', 'n', 'inactive', 'disabled', ''];
 
@@ -21,14 +23,9 @@ class BooleanTransformer implements TransformerInterface
     return 'boolean';
   }
 
-  public function getDescription(): string
+  public function getOptionNames(): array
   {
-    return 'Convert various values to boolean (1/0, true/false, yes/no, etc.)';
-  }
-
-  public function supports(string $type): bool
-  {
-    return in_array(strtolower($type), ['bool', 'boolean', 'bit']);
+    return ['true_values', 'false_values', 'output_format', 'null_value'];
   }
 
   public function transform(mixed $value, array $context = []): mixed
@@ -57,7 +54,9 @@ class BooleanTransformer implements TransformerInterface
       'bool', 'boolean' => $isTrue,
       'string' => $isTrue ? 'true' : 'false',
       'yes_no' => $isTrue ? 'yes' : 'no',
-      default => $isTrue ? 1 : 0,
+      default => throw new \InvalidArgumentException(
+        "Unknown boolean output_format '{$outputFormat}'; use one of: " . implode(', ', self::OUTPUT_FORMATS),
+      ),
     };
   }
 }

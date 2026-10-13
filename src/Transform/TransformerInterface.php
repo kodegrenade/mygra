@@ -6,7 +6,7 @@ namespace Mygra\Transform;
 
 /**
  * Transformer Interface
- * 
+ *
  * Defines the contract for data transformers that convert values
  * from source format to target format during migration.
  */
@@ -22,20 +22,14 @@ interface TransformerInterface
   public function transform(mixed $value, array $context = []): mixed;
 
   /**
-   * Check if this transformer supports a given type.
-   *
-   * @param string $type The type to check
-   * @return bool True if supported
-   */
-  public function supports(string $type): bool;
-
-  /**
    * Get the unique name of this transformer.
    */
   public function getName(): string;
 
   /**
-   * Get a description of what this transformer does.
+   * Option names this transformer reads; the config validator rejects any other.
+   *
+   * @return string[]
    */
-  public function getDescription(): string;
+  public function getOptionNames(): array;
 }

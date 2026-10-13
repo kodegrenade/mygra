@@ -4,16 +4,21 @@ declare(strict_types=1);
 
 namespace Mygra\Logger;
 
+use Psr\Log\AbstractLogger;
+use Psr\Log\InvalidArgumentException;
+
 /**
  * File Logger
- * 
+ *
  * Logs messages to a file with timestamps and log levels.
  */
-class FileLogger implements LoggerInterface
+class FileLogger extends AbstractLogger
 {
   private string $logFile;
   private string $minLevel;
   private bool $includeTimestamp;
+  /** @var array<string, resource> Open handles by resolved path ({date}/{level} can give several) */
+  private array $handles = [];
 
   private const LEVELS = [
     'debug' => 0,
@@ -29,85 +34,69 @@ class FileLogger implements LoggerInterface
   public function __construct(
     string $logFile,
     string $minLevel = 'debug',
-    bool $includeTimestamp = true
+    bool $includeTimestamp = true,
   ) {
-    $this->logFile = $logFile;
-    $this->minLevel = strtolower($minLevel);
-    $this->includeTimestamp = $includeTimestamp;
+    $minLevel = strtolower($minLevel);
+    if (!isset(self::LEVELS[$minLevel])) {
+      throw new \InvalidArgumentException(
+        "Unknown log level '{$minLevel}'; use one of: " . implode(', ', array_keys(self::LEVELS)),
+      );
+    }
 
-    // Ensure log directory exists
-    $dir = dirname($logFile);
-    if (!is_dir($dir)) {
-      mkdir($dir, 0777, true);
+    $this->logFile = $logFile;
+    $this->minLevel = $minLevel;
+    $this->includeTimestamp = $includeTimestamp;
+  }
+
+  public function __destruct()
+  {
+    foreach ($this->handles as $handle) {
+      fclose($handle);
     }
   }
 
-  public function emergency(string $message, array $context = []): void
+  public function log($level, string|\Stringable $message, array $context = []): void
   {
-    $this->log('emergency', $message, $context);
-  }
-
-  public function alert(string $message, array $context = []): void
-  {
-    $this->log('alert', $message, $context);
-  }
-
-  public function critical(string $message, array $context = []): void
-  {
-    $this->log('critical', $message, $context);
-  }
-
-  public function error(string $message, array $context = []): void
-  {
-    $this->log('error', $message, $context);
-  }
-
-  public function warning(string $message, array $context = []): void
-  {
-    $this->log('warning', $message, $context);
-  }
-
-  public function notice(string $message, array $context = []): void
-  {
-    $this->log('notice', $message, $context);
-  }
-
-  public function info(string $message, array $context = []): void
-  {
-    $this->log('info', $message, $context);
-  }
-
-  public function debug(string $message, array $context = []): void
-  {
-    $this->log('debug', $message, $context);
-  }
-
-  public function log(string $level, string $message, array $context = []): void
-  {
-    $level = strtolower($level);
+    $level = strtolower((string) $level);
+    if (!isset(self::LEVELS[$level])) {
+      throw new InvalidArgumentException(
+        "Unknown log level '{$level}'; use one of: " . implode(', ', array_keys(self::LEVELS)),
+      );
+    }
 
     // Check minimum level
-    if ((self::LEVELS[$level] ?? 0) < (self::LEVELS[$this->minLevel] ?? 0)) {
+    if (self::LEVELS[$level] < self::LEVELS[$this->minLevel]) {
       return;
     }
 
     // Interpolate context into message
-    $message = $this->interpolate($message, $context);
+    $message = $this->interpolate((string) $message, $context);
 
     // Format the log entry
     $entry = $this->formatEntry($level, $message);
 
-    // Resolve dynamic log file path
-    $resolvedLogFile = $this->resolveLogPath($level);
+    fwrite($this->handle($this->resolveLogPath($level)), $entry);
+  }
 
-    // Ensure directory exists for resolved path
-    $dir = dirname($resolvedLogFile);
-    if (!is_dir($dir)) {
-      mkdir($dir, 0777, true);
+  /**
+   * Open handle for a resolved path, opened (and its directory created) on first use.
+   *
+   * @return resource
+   */
+  private function handle(string $path)
+  {
+    if (!isset($this->handles[$path])) {
+      $dir = dirname($path);
+      if (!is_dir($dir) && !mkdir($dir, 0755, true) && !is_dir($dir)) {
+        throw new \RuntimeException("Cannot create log directory: {$dir}");
+      }
+      $handle = fopen($path, 'a');
+      if ($handle === false) {
+        throw new \RuntimeException("Cannot open log file: {$path}");
+      }
+      $this->handles[$path] = $handle;
     }
-
-    // Write to file
-    file_put_contents($resolvedLogFile, $entry, FILE_APPEND | LOCK_EX);
+    return $this->handles[$path];
   }
 
   /**
@@ -159,21 +148,5 @@ class FileLogger implements LoggerInterface
     $parts[] = $message;
 
     return implode(' ', $parts) . PHP_EOL;
-  }
-
-  /**
-   * Get the log file path.
-   */
-  public function getLogFile(): string
-  {
-    return $this->logFile;
-  }
-
-  /**
-   * Clear the log file.
-   */
-  public function clear(): void
-  {
-    file_put_contents($this->logFile, '');
   }
 }

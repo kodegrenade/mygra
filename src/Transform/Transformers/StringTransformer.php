@@ -8,24 +8,25 @@ use Mygra\Transform\TransformerInterface;
 
 /**
  * String Transformer
- * 
+ *
  * Performs string manipulations: trim, case conversion, truncation, etc.
  */
 class StringTransformer implements TransformerInterface
 {
+  public const CASES = ['lower', 'lowercase', 'upper', 'uppercase', 'title', 'titlecase', 'ucfirst', 'lcfirst', 'snake', 'camel', 'pascal', 'kebab'];
+  public const OPERATIONS = [
+    'trim', 'ltrim', 'rtrim', 'case', 'truncate', 'prefix', 'suffix', 'replace', 'regex_replace',
+    'slug', 'strip_tags', 'html_entities', 'html_decode',
+  ];
+
   public function getName(): string
   {
     return 'string';
   }
 
-  public function getDescription(): string
+  public function getOptionNames(): array
   {
-    return 'String manipulations: trim, case conversion, truncation, padding, etc.';
-  }
-
-  public function supports(string $type): bool
-  {
-    return in_array(strtolower($type), ['string', 'char', 'varchar', 'text']);
+    return ['operations', 'trim', 'trim_chars', 'case', 'max_length', 'ellipsis', 'prefix', 'suffix', 'replace', 'regex_replace', 'allowed_tags', 'null_value'];
   }
 
   public function transform(mixed $value, array $context = []): mixed
@@ -37,7 +38,8 @@ class StringTransformer implements TransformerInterface
     $value = (string) $value;
 
     // Apply operations in order
-    $operations = $context['operations'] ?? $this->getDefaultOperations($context);
+    // `operations` sets the order; options such as case or max_length still apply when not listed
+    $operations = array_values(array_unique([...($context['operations'] ?? []), ...$this->getDefaultOperations($context)]));
 
     foreach ($operations as $operation) {
       $value = $this->applyOperation($value, $operation, $context);
@@ -88,18 +90,20 @@ class StringTransformer implements TransformerInterface
       'replace' => str_replace(
         $context['replace']['search'] ?? '',
         $context['replace']['replacement'] ?? '',
-        $value
+        $value,
       ),
       'regex_replace' => preg_replace(
         $context['regex_replace']['pattern'] ?? '//',
         $context['regex_replace']['replacement'] ?? '',
-        $value
+        $value,
       ),
       'slug' => $this->slugify($value),
       'strip_tags' => strip_tags($value, $context['allowed_tags'] ?? ''),
       'html_entities' => htmlentities($value, ENT_QUOTES, 'UTF-8'),
       'html_decode' => html_entity_decode($value, ENT_QUOTES, 'UTF-8'),
-      default => $value,
+      default => throw new \InvalidArgumentException(
+        "Unknown string operation '{$operation}'; use one of: " . implode(', ', self::OPERATIONS),
+      ),
     };
   }
 
@@ -115,7 +119,7 @@ class StringTransformer implements TransformerInterface
       'camel' => $this->toCamelCase($value),
       'pascal' => $this->toPascalCase($value),
       'kebab' => $this->toKebabCase($value),
-      default => $value,
+      default => throw new \InvalidArgumentException("Unknown case '{$case}'; use one of: " . implode(', ', self::CASES)),
     };
   }
 

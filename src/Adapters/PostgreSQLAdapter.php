@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mygra\Adapters;
 
-use Mygra\Schema\TableSchema;
 use Mygra\Schema\ColumnSchema;
+use Mygra\Schema\TableSchema;
 
 /**
  * PostgreSQL Database Adapter
- * 
+ *
  * Full-featured PostgreSQL adapter with schema introspection,
  * transaction support with savepoints, and streaming capabilities.
  */
@@ -47,20 +47,11 @@ class PostgreSQLAdapter extends AbstractAdapter
       $dsn,
       $config['user'] ?? 'postgres',
       $config['password'] ?? '',
-      $options
+      $options,
     );
 
     // Set search path to the specified schema
-    $this->pdo->exec("SET search_path TO " . $this->quoteIdentifier($this->schema));
-  }
-
-  /**
-   * Set the active schema (search_path).
-   */
-  public function setSchema(string $schema): void
-  {
-    $this->schema = $schema;
-    $this->execute("SET search_path TO " . $this->quoteIdentifier($schema));
+    $this->pdo->exec('SET search_path TO ' . $this->quoteIdentifier($this->schema));
   }
 
   public function streamQuery(string $sql, array $params = []): \Generator
@@ -105,10 +96,10 @@ class PostgreSQLAdapter extends AbstractAdapter
     $result = $this->query(
       "SELECT table_name 
              FROM information_schema.tables 
-             WHERE table_schema = $1 
+             WHERE table_schema = ? 
              AND table_type = 'BASE TABLE'
              ORDER BY table_name",
-      [$this->schema]
+      [$this->schema],
     );
 
     return array_column($result, 'table_name');
@@ -120,7 +111,7 @@ class PostgreSQLAdapter extends AbstractAdapter
     return $this->buildTableSchema($table, $columnsData);
   }
 
-  public function getColumns(string $table): array
+  protected function getColumns(string $table): array
   {
     return $this->query(
       "SELECT 
@@ -140,8 +131,8 @@ class PostgreSQLAdapter extends AbstractAdapter
                  FROM information_schema.table_constraints tc
                  JOIN information_schema.key_column_usage kcu 
                      ON tc.constraint_name = kcu.constraint_name
-                 WHERE tc.table_schema = $1
-                 AND tc.table_name = $2
+                 WHERE tc.table_schema = ?
+                 AND tc.table_name = ?
                  AND tc.constraint_type = 'PRIMARY KEY'
              ) pk ON c.column_name = pk.column_name
              LEFT JOIN pg_catalog.pg_statio_all_tables st 
@@ -150,10 +141,10 @@ class PostgreSQLAdapter extends AbstractAdapter
              LEFT JOIN pg_catalog.pg_description pgd 
                  ON pgd.objoid = st.relid 
                  AND pgd.objsubid = c.ordinal_position
-             WHERE c.table_schema = $1 
-             AND c.table_name = $2
+             WHERE c.table_schema = ? 
+             AND c.table_name = ?
              ORDER BY c.ordinal_position",
-      [$this->schema, $table]
+      [$this->schema, $table, $this->schema, $table],
     );
   }
 
@@ -165,11 +156,11 @@ class PostgreSQLAdapter extends AbstractAdapter
              JOIN information_schema.key_column_usage kcu 
                  ON tc.constraint_name = kcu.constraint_name
                  AND tc.table_schema = kcu.table_schema
-             WHERE tc.table_schema = $1
-             AND tc.table_name = $2
+             WHERE tc.table_schema = ?
+             AND tc.table_name = ?
              AND tc.constraint_type = 'PRIMARY KEY'
              ORDER BY kcu.ordinal_position",
-      [$this->schema, $table]
+      [$this->schema, $table],
     );
 
     if (empty($result)) {
@@ -195,10 +186,10 @@ class PostgreSQLAdapter extends AbstractAdapter
              JOIN information_schema.constraint_column_usage ccu
                  ON ccu.constraint_name = tc.constraint_name
                  AND ccu.table_schema = tc.table_schema
-             WHERE tc.table_schema = $1
-             AND tc.table_name = $2
+             WHERE tc.table_schema = ?
+             AND tc.table_name = ?
              AND tc.constraint_type = 'FOREIGN KEY'",
-      [$this->schema, $table]
+      [$this->schema, $table],
     );
 
     $foreignKeys = [];
@@ -214,10 +205,10 @@ class PostgreSQLAdapter extends AbstractAdapter
     return $foreignKeys;
   }
 
-  public function getIndexes(string $table): array
+  protected function getIndexes(string $table): array
   {
     $result = $this->query(
-      "SELECT
+      'SELECT
                 i.relname as index_name,
                 a.attname as column_name,
                 ix.indisunique as is_unique,
@@ -227,10 +218,10 @@ class PostgreSQLAdapter extends AbstractAdapter
              JOIN pg_class i ON i.oid = ix.indexrelid
              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
              JOIN pg_namespace n ON n.oid = t.relnamespace
-             WHERE n.nspname = $1
-             AND t.relname = $2
-             ORDER BY i.relname, a.attnum",
-      [$this->schema, $table]
+             WHERE n.nspname = ?
+             AND t.relname = ?
+             ORDER BY i.relname, a.attnum',
+      [$this->schema, $table],
     );
 
     $indexes = [];
@@ -254,83 +245,42 @@ class PostgreSQLAdapter extends AbstractAdapter
   // Batch Operations (PostgreSQL Optimized)
   // =========================================================================
 
-  public function batchInsert(string $table, array $columns, array $rows): int
+  /**
+   * Explicit IDs inserted into serial/identity columns leave the sequence behind, so the
+   * app's next insert would reuse ID 1. Move each sequence to MAX(column), never backwards.
+   */
+  public function syncSequences(string $table): void
   {
-    if (empty($rows)) {
-      return 0;
-    }
+    $this->advanceSequences($table, 0);
+  }
 
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    // PostgreSQL uses $1, $2, etc for placeholders
-    $paramIndex = 1;
-    $rowPlaceholders = [];
-    $values = [];
-
-    foreach ($rows as $row) {
-      $placeholders = [];
-      foreach ($columns as $col) {
-        $placeholders[] = '$' . $paramIndex++;
-        $values[] = $row[$col] ?? null;
-      }
-      $rowPlaceholders[] = '(' . implode(', ', $placeholders) . ')';
-    }
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES " . implode(', ', $rowPlaceholders);
-
-    return $this->execute($sql, $values);
+  public function reserveIds(string $table, int $next): void
+  {
+    $this->advanceSequences($table, $next - 1);
   }
 
   /**
-   * Batch insert with ON CONFLICT (upsert) support.
+   * Set each serial/identity sequence of the table to at least max(MAX(column), $floor).
    */
-  public function batchUpsert(
-    string $table,
-    array $columns,
-    array $rows,
-    array $conflictColumns,
-    array $updateColumns = []
-  ): int {
-    if (empty($rows)) {
-      return 0;
-    }
+  private function advanceSequences(string $table, int $floor): void
+  {
+    $qualified = $this->quoteIdentifier($this->schema) . '.' . $this->quoteIdentifier($table);
+    $columns = $this->query(
+      "SELECT column_name FROM information_schema.columns
+             WHERE table_schema = ? AND table_name = ?
+             AND (column_default LIKE 'nextval(%' OR is_identity = 'YES')",
+      [$this->schema, $table],
+    );
 
-    $quotedTable = $this->quoteIdentifier($table);
-    $quotedColumns = array_map([$this, 'quoteIdentifier'], $columns);
-    $columnList = implode(', ', $quotedColumns);
-
-    $paramIndex = 1;
-    $rowPlaceholders = [];
-    $values = [];
-
-    foreach ($rows as $row) {
-      $placeholders = [];
-      foreach ($columns as $col) {
-        $placeholders[] = '$' . $paramIndex++;
-        $values[] = $row[$col] ?? null;
+    foreach (array_column($columns, 'column_name') as $column) {
+      $sequence = $this->query('SELECT pg_get_serial_sequence(?, ?) AS seq', [$qualified, $column])[0]['seq'] ?? null;
+      $max = $this->query("SELECT MAX({$this->quoteIdentifier($column)}) AS max_id FROM {$qualified}")[0]['max_id'] ?? 0;
+      $value = max((int) $max, $floor);
+      if ($sequence === null || $value < 1) {
+        continue;
       }
-      $rowPlaceholders[] = '(' . implode(', ', $placeholders) . ')';
+      $this->query("SELECT setval(?, GREATEST(?, (SELECT last_value FROM {$sequence})))", [$sequence, $value]);
     }
-
-    $conflictList = implode(', ', array_map([$this, 'quoteIdentifier'], $conflictColumns));
-
-    $sql = "INSERT INTO {$quotedTable} ({$columnList}) VALUES " . implode(', ', $rowPlaceholders);
-    $sql .= " ON CONFLICT ({$conflictList})";
-
-    if (!empty($updateColumns)) {
-      $updates = [];
-      foreach ($updateColumns as $col) {
-        $quoted = $this->quoteIdentifier($col);
-        $updates[] = "{$quoted} = EXCLUDED.{$quoted}";
-      }
-      $sql .= " DO UPDATE SET " . implode(', ', $updates);
-    } else {
-      $sql .= " DO NOTHING";
-    }
-
-    return $this->execute($sql, $values);
   }
 
   // =========================================================================
@@ -342,42 +292,6 @@ class PostgreSQLAdapter extends AbstractAdapter
     // PostgreSQL uses double quotes for identifier quoting
     $identifier = str_replace('"', '""', $identifier);
     return '"' . $identifier . '"';
-  }
-
-  public function getPlaceholderStyle(): string
-  {
-    return 'numbered'; // PostgreSQL uses $1, $2, etc.
-  }
-
-  /**
-   * Get the current schema.
-   */
-  public function getCurrentSchema(): string
-  {
-    return $this->schema;
-  }
-
-  /**
-   * Get PostgreSQL server version.
-   */
-  public function getServerVersion(): string
-  {
-    $result = $this->query("SELECT version()");
-    return $result[0]['version'] ?? '';
-  }
-
-  /**
-   * Get all available schemas.
-   */
-  public function getSchemas(): array
-  {
-    $result = $this->query(
-      "SELECT schema_name 
-             FROM information_schema.schemata 
-             WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
-             ORDER BY schema_name"
-    );
-    return array_column($result, 'schema_name');
   }
 
   // =========================================================================
@@ -410,7 +324,7 @@ class PostgreSQLAdapter extends AbstractAdapter
       isAutoIncrement: $isAutoIncrement,
       isUnique: false, // Would need separate query
       comment: $columnData['column_comment'] ?? null,
-      extra: []
+      extra: [],
     );
   }
 
